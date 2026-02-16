@@ -3,11 +3,6 @@
 #include "nes/ppu/ppu2c02.h"
 #include <string.h>
 
-static u32 pack_argb(u8 a, u8 r, u8 g, u8 b)
-{
-    return ((u32)a << 24) | ((u32)r << 16) | ((u32)g << 8) | (u32)b;
-}
-
 static void NES_Clock(Nes* n)
 {
     if (!n) return;
@@ -76,40 +71,13 @@ void NES_RunFrame(Nes* n)
 
     PPU2C02_ClearFrameComplete(&n->bus.ppu);
 
-    // Frame execution is now driven by the PPU frame boundary.
+    // Frame execution is driven by the PPU frame boundary.
     while (!PPU2C02_FrameComplete(&n->bus.ppu) && !n->cpu.jammed) {
         NES_Clock(n);
     }
 
-    // Placeholder visuals until full renderer output is wired through the PPU path.
-    bool jam = n->cpu.jammed;
-
-    u8 base = jam ? 40u : 0u;
-    u32 t = (u32)(n->frame_count & 255u);
-
-    for (int y = 0; y < NES_FB_H; y++) {
-        for (int x = 0; x < NES_FB_W; x++) {
-            u8 r = (u8)(((x + (int)t) & 255) >> 2);
-            u8 g = (u8)(((y + (int)(t >> 1)) & 255) >> 2);
-            u8 b = (u8)(((x ^ y ^ (int)t) & 255) >> 2);
-
-            if (jam) {
-                r = (u8)(r + 120u);
-                g = (u8)(g + base);
-                b = (u8)(b + base);
-            }
-
-            n->fb[y * NES_FB_W + x] = pack_argb(0xFF, r, g, b);
-        }
-    }
-
-    int w = 16 + (n->cpu.pc & 0xFF);
-    if (w > NES_FB_W - 16) w = NES_FB_W - 16;
-    for (int y = 8; y < 16; y++) {
-        for (int x = 8; x < 8 + w; x++) {
-            n->fb[y * NES_FB_W + x] = jam ? 0xFFFF0000u : 0xFFFFFFFFu;
-        }
-    }
+    // Present PPU-rendered framebuffer.
+    memcpy(n->fb, n->bus.ppu.fb, sizeof(n->fb));
 
     n->frame_count++;
 }

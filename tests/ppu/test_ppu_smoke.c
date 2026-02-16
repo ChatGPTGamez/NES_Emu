@@ -66,12 +66,32 @@ static void test_vblank_sets_frame_and_nmi(void)
     }
 }
 
+static void test_frame_render_uses_palette_backdrop(void)
+{
+    PPU2C02 p;
+    assert(PPU2C02_Init(&p, NULL));
+
+    // CHR reads resolve to 0 with no cart, so all pixels are background color 0.
+    p.palette[0] = 0x01u;
+
+    p.scanline = 260;
+    p.cycle = 340;
+    PPU2C02_Clock(&p);
+
+    assert(PPU2C02_FrameComplete(&p));
+
+    u32 c = p.fb[0];
+    assert(c == 0xFF001E74u);
+    assert(p.fb[(PPU_FB_H - 1) * PPU_FB_W + (PPU_FB_W - 1)] == c);
+}
+
 int main(void)
 {
     test_ppustatus_read_clears_vblank();
     test_ppuaddr_ppudata_increment_1();
     test_ppuctrl_increment_32_mode();
     test_vblank_sets_frame_and_nmi();
+    test_frame_render_uses_palette_backdrop();
     puts("ppu smoke: OK");
     return 0;
 }

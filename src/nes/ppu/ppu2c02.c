@@ -4,9 +4,21 @@
 
 enum {
     PPUCTRL_VRAM_INC = 1u << 2,
+    PPUCTRL_BG_TABLE = 1u << 4,
     PPUCTRL_NMI      = 1u << 7,
 
     PPUSTATUS_VBLANK = 1u << 7
+};
+
+static const u32 k_nes_rgb[64] = {
+    0xFF545454u, 0xFF001E74u, 0xFF081090u, 0xFF300088u, 0xFF440064u, 0xFF5C0030u, 0xFF540400u, 0xFF3C1800u,
+    0xFF202A00u, 0xFF083A00u, 0xFF004000u, 0xFF003C00u, 0xFF00323Cu, 0xFF000000u, 0xFF000000u, 0xFF000000u,
+    0xFF989698u, 0xFF084CC4u, 0xFF3032ECu, 0xFF5C1EE4u, 0xFF8814B0u, 0xFFA01464u, 0xFF982220u, 0xFF783C00u,
+    0xFF545A00u, 0xFF287200u, 0xFF087C00u, 0xFF007628u, 0xFF006678u, 0xFF000000u, 0xFF000000u, 0xFF000000u,
+    0xFFECEEECu, 0xFF4C9AECu, 0xFF787CEC,  0xFFB062ECu, 0xFFE454ECu, 0xFFEC58B4u, 0xFFEC6A64u, 0xFFD48820u,
+    0xFFA0AA00u, 0xFF74C400u, 0xFF4CD020u, 0xFF38CC6Cu, 0xFF38B4CCu, 0xFF3C3C3Cu, 0xFF000000u, 0xFF000000u,
+    0xFFECEEECu, 0xFFA8CCECu, 0xFFBCBCEC,  0xFFD4B2F4u, 0xFFECAEECu, 0xFFECAED4u, 0xFFECB4B0u, 0xFFE4C490u,
+    0xFFCCD278u, 0xFFB4DE78u, 0xFFA8E290u, 0xFF98E2B4u, 0xFFA0D6E4u, 0xFFA0A2A0u, 0xFF000000u, 0xFF000000u
 };
 
 static inline u16 mirror_nametable_addr(const PPU2C02* p, u16 addr)
@@ -36,12 +48,12 @@ static inline u16 mirror_nametable_addr(const PPU2C02* p, u16 addr)
 
 static inline u16 mirror_palette_addr(u16 addr)
 {
-    u16 p = (u16)(addr & 0x001Fu);
-    if (p == 0x10u) p = 0x00u;
-    if (p == 0x14u) p = 0x04u;
-    if (p == 0x18u) p = 0x08u;
-    if (p == 0x1Cu) p = 0x0Cu;
-    return p;
+    u16 pal = (u16)(addr & 0x001Fu);
+    if (pal == 0x10u) pal = 0x00u;
+    if (pal == 0x14u) pal = 0x04u;
+    if (pal == 0x18u) pal = 0x08u;
+    if (pal == 0x1Cu) pal = 0x0Cu;
+    return pal;
 }
 
 static u8 ppu_mem_read(PPU2C02* p, u16 addr)
@@ -86,6 +98,52 @@ static void maybe_raise_nmi(PPU2C02* p)
 {
     if ((p->status & PPUSTATUS_VBLANK) && (p->ctrl & PPUCTRL_NMI)) {
         p->nmi_pending = true;
+    }
+}
+
+static u32 palette_color(PPU2C02* p, u8 pal_index)
+{
+    u8 entry = ppu_mem_read(p, (u16)(0x3F00u + pal_index));
+    return k_nes_rgb[entry & 0x3Fu];
+}
+
+static void render_background_frame(PPU2C02* p)
+{
+    const u16 nt_base = 0x2000u;
+    const u16 attr_base = 0x23C0u;
+    const u16 pattern_base = (p->ctrl & PPUCTRL_BG_TABLE) ? 0x1000u : 0x0000u;
+
+    for (int y = 0; y < PPU_FB_H; y++) {
+        int tile_y = y >> 3;
+        int fine_y = y & 7;
+
+        for (int x = 0; x < PPU_FB_W; x++) {
+            int tile_x = x >> 3;
+            int fine_x = x & 7;
+
+            u16 nt_addr = (u16)(nt_base + (u16)(tile_y * 32 + tile_x));
+            u8 tile_id = ppu_mem_read(p, nt_addr);
+
+            u16 attr_addr = (u16)(attr_base + (u16)((tile_y >> 2) * 8 + (tile_x >> 2)));
+            u8 attr = ppu_mem_read(p, attr_addr);
+            u8 shift = (u8)(((tile_y & 0x02) ? 4 : 0) + ((tile_x & 0x02) ? 2 : 0));
+            u8 pal_hi = (u8)((attr >> shift) & 0x03u);
+
+            u16 patt_addr = (u16)(pattern_base + (u16)tile_id * 16u + (u16)fine_y);
+            u8 plane0 = ppu_mem_read(p, patt_addr);
+            u8 plane1 = ppu_mem_read(p, (u16)(patt_addr + 8u));
+
+            u8 bit = (u8)(7 - fine_x);
+            u8 lo = (u8)((plane0 >> bit) & 1u);
+            u8 hi = (u8)((plane1 >> bit) & 1u);
+            u8 px = (u8)((hi << 1) | lo);
+
+            u8 pal_index = (px == 0)
+                ? 0u
+                : (u8)(((pal_hi << 2) | px) & 0x0Fu);
+
+            p->fb[y * PPU_FB_W + x] = palette_color(p, pal_index);
+        }
     }
 }
 
@@ -252,6 +310,7 @@ void PPU2C02_Clock(PPU2C02* p)
         if (p->scanline > 260) {
             p->scanline = -1;
             p->frame_count++;
+            render_background_frame(p);
             p->frame_complete = true;
         }
     }
