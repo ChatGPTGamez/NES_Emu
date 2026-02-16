@@ -23,6 +23,14 @@ typedef struct Bus {
     u8 controller_shift_p1;
     bool controller_strobe;
 
+    // OAM DMA timing/model state
+    bool dma_active;
+    u16 dma_stall_cycles;
+    u8 dma_page;
+
+    // CPU-cycle parity tracker (0 = even, 1 = odd)
+    u8 cpu_cycle_parity;
+
     // Snapshot of current input (set each frame)
     NesInput input;
 } Bus;
@@ -32,6 +40,8 @@ void Bus_Reset(Bus* b);
 
 void Bus_SetCart(Bus* b, Cart* cart);
 void Bus_SetInput(Bus* b, NesInput input);
+
+bool Bus_DMATick(Bus* b);
 
 // CPU read/write (the 6502 will call these)
 u8   Bus_CPURead(Bus* b, u16 addr);

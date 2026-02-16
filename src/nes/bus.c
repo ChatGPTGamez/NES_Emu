@@ -9,16 +9,29 @@ static void latch_controllers(Bus* b)
     b->controller_shift_p1 = b->controller_latch_p1;
 }
 
-static void perform_oam_dma(Bus* b, u8 page)
+static void perform_oam_dma_copy(Bus* b, u8 page)
 {
     // CPU writes page to $4014; DMA copies 256 bytes from page<<8 to PPU OAM.
-    // Cycle stealing is not modeled yet; this is functional data transfer only.
     u16 base = (u16)((u16)page << 8);
     for (u16 i = 0; i < 256u; i++) {
         u8 v = Bus_CPURead(b, (u16)(base + i));
         b->ppu.oam[b->ppu.oam_addr] = v;
         b->ppu.oam_addr++;
     }
+}
+
+static void begin_oam_dma(Bus* b, u8 page)
+{
+    if (!b) return;
+
+    b->dma_page = page;
+    perform_oam_dma_copy(b, page);
+
+    // CPU is stalled for 513 or 514 cycles, depending on current parity.
+    // This is instruction-granularity timing (not per-microcycle exact), but
+    // preserves the key side effect that DMA steals CPU time.
+    b->dma_stall_cycles = (u16)(513u + (b->cpu_cycle_parity ? 1u : 0u));
+    b->dma_active = true;
 }
 
 bool Bus_Init(Bus* b, Cart* cart)
@@ -44,6 +57,11 @@ void Bus_Reset(Bus* b)
     b->controller_shift_p1 = 0;
     b->controller_strobe = false;
 
+    b->dma_active = false;
+    b->dma_stall_cycles = 0;
+    b->dma_page = 0;
+    b->cpu_cycle_parity = 0;
+
     b->input.p1 = 0;
 
     PPU2C02_Reset(&b->ppu);
@@ -65,6 +83,21 @@ void Bus_SetInput(Bus* b, NesInput input)
     if (b->controller_strobe) {
         latch_controllers(b);
     }
+}
+
+bool Bus_DMATick(Bus* b)
+{
+    if (!b || !b->dma_active) return false;
+
+    if (b->dma_stall_cycles > 0) {
+        b->dma_stall_cycles--;
+    }
+
+    if (b->dma_stall_cycles == 0) {
+        b->dma_active = false;
+    }
+
+    return true;
 }
 
 u8 Bus_CPURead(Bus* b, u16 addr)
@@ -148,7 +181,7 @@ void Bus_CPUWrite(Bus* b, u16 addr, u8 data)
     if (addr >= 0x4000 && addr <= 0x4017) {
         // $4014: OAMDMA
         if (addr == 0x4014) {
-            perform_oam_dma(b, data);
+            begin_oam_dma(b, data);
             return;
         }
 

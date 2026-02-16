@@ -3,20 +3,40 @@
 #include "nes/ppu/ppu2c02.h"
 #include <string.h>
 
-static void NES_Clock(Nes* n)
+static void clock_ppu_and_nmi(Nes* n, int ppu_cycles)
 {
-    if (!n) return;
-    if (n->cpu.jammed) return;
-
-    int cpu_cycles = CPU6502_Step(&n->cpu);
-    if (cpu_cycles <= 0) return;
-
-    for (int i = 0; i < cpu_cycles * 3; i++) {
+    for (int i = 0; i < ppu_cycles; i++) {
         PPU2C02_Clock(&n->bus.ppu);
         if (PPU2C02_PollNMI(&n->bus.ppu)) {
             CPU6502_RequestNMI(&n->cpu);
         }
     }
+}
+
+static void consume_cpu_cycles_for_timing(Nes* n, int cpu_cycles)
+{
+    if (!n || cpu_cycles <= 0) return;
+
+    clock_ppu_and_nmi(n, cpu_cycles * 3);
+    n->bus.cpu_cycle_parity = (u8)((n->bus.cpu_cycle_parity + (u8)(cpu_cycles & 1)) & 1u);
+}
+
+static void NES_Clock(Nes* n)
+{
+    if (!n) return;
+
+    // During OAM DMA, CPU is stalled but PPU/NMI timing continues.
+    if (Bus_DMATick(&n->bus)) {
+        consume_cpu_cycles_for_timing(n, 1);
+        return;
+    }
+
+    if (n->cpu.jammed) return;
+
+    int cpu_cycles = CPU6502_Step(&n->cpu);
+    if (cpu_cycles <= 0) return;
+
+    consume_cpu_cycles_for_timing(n, cpu_cycles);
 }
 
 bool NES_Init(Nes* n)
