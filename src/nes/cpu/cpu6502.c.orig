@@ -61,21 +61,6 @@ static inline u16 vec_read16(CPU6502* c, u16 a)
     return (u16)((u16)lo | ((u16)hi << 8));
 }
 
-static void service_interrupt(CPU6502* c, u16 vec_addr, bool set_break_flag)
-{
-    u16 ret = c->pc;
-    push(c, (u8)((ret >> 8) & 0xFFu));
-    push(c, (u8)(ret & 0xFFu));
-
-    u8 p_push = (u8)(c->p | F_U);
-    if (set_break_flag) p_push |= F_B;
-    else p_push &= (u8)~F_B;
-    push(c, p_push);
-
-    c->p = (u8)(c->p | F_I);
-    c->pc = vec_read16(c, vec_addr);
-}
-
 bool CPU6502_Init(CPU6502* c, Bus* bus)
 {
     if (!c || !bus) return false;
@@ -86,8 +71,6 @@ bool CPU6502_Init(CPU6502* c, Bus* bus)
     c->p = (u8)(F_I | F_U);
     c->cycles = 0;
     c->jammed = false;
-    c->nmi_pending = false;
-    c->irq_pending = false;
     return true;
 }
 
@@ -99,8 +82,6 @@ void CPU6502_Reset(CPU6502* c)
     c->sp = 0xFD;
     c->p = (u8)(F_I | F_U);
     c->jammed = false;
-    c->nmi_pending = false;
-    c->irq_pending = false;
 
     c->pc = vec_read16(c, 0xFFFC);
     c->cycles += 7;
@@ -199,21 +180,6 @@ int CPU6502_Step(CPU6502* c)
     if (!c || !c->bus) return 0;
     if (c->jammed) return 0;
 
-    if (c->nmi_pending) {
-        c->nmi_pending = false;
-        service_interrupt(c, 0xFFFA, false);
-        c->cycles += 7;
-        return 7;
-    }
-
-    if (c->irq_pending && (c->p & F_I) == 0) {
-        c->irq_pending = false;
-        service_interrupt(c, 0xFFFE, false);
-        c->cycles += 7;
-        return 7;
-    }
-
-
     u16 pc0 = c->pc;
     u8 op = fetch8(c);
 
@@ -234,7 +200,7 @@ int CPU6502_Step(CPU6502* c)
     if (page_cross) {
         // Only modes where page cross matters: ABX/ABY/IZY for reads
         // Stores on 6502 usually don't get the extra cycle; some do fixed.
-        // We'll handle read vs write by letting STA/STX/STY ignore page_cross via table cycles.
+        // We’ll handle “read vs write” by letting STA/STX/STY ignore page_cross via table cycles.
         // For simplicity: add extra cycle only for instructions that are not pure stores.
         // (STA/STX/STY have fixed cycle counts already in table.)
         if (info.fn != op_STA && info.fn != op_STX && info.fn != op_STY) {
@@ -271,7 +237,7 @@ static inline void branch(CPU6502* c, bool cond, u8 rel_raw)
     s8 rel = (s8)rel_raw;
     u16 old = c->pc;
     c->pc = (u16)(c->pc + (s16)rel);
-    // Cycle penalties are handled imperfectly at table-level; weÂ’ll do accurate timing later.
+    // Cycle penalties are handled imperfectly at table-level; we’ll do accurate timing later.
     // But PC behavior is correct.
     (void)old;
 }
@@ -399,11 +365,10 @@ void op_ADC(CPU6502* c, u16 addr, bool has, bool pcross)
 {
     (void)has;(void)pcross;
     u8 v = rd(c, addr);
-    unsigned int carry = ((c->p & F_C) != 0u) ? 1u : 0u;
-    unsigned int sum = (unsigned int)c->a + (unsigned int)v + carry;
+    u16 sum = (u16)c->a + (u16)v + (u16)((c->p & F_C) ? 1 : 0);
     u8 res = (u8)sum;
 
-    if (sum > 0xFFu) c->p |= F_C; else c->p &= (u8)~F_C;
+    if (sum > 0xFF) c->p |= F_C; else c->p &= (u8)~F_C;
     // overflow: (~(A^V) & (A^R)) & 0x80
     if (((~(c->a ^ v)) & (c->a ^ res) & 0x80) != 0) c->p |= F_V;
     else c->p &= (u8)~F_V;
@@ -416,11 +381,10 @@ void op_SBC(CPU6502* c, u16 addr, bool has, bool pcross)
 {
     (void)has;(void)pcross;
     u8 v = rd(c, addr) ^ 0xFFu;
-    unsigned int carry = ((c->p & F_C) != 0u) ? 1u : 0u;
-    unsigned int sum = (unsigned int)c->a + (unsigned int)v + carry;
+    u16 sum = (u16)c->a + (u16)v + (u16)((c->p & F_C) ? 1 : 0);
     u8 res = (u8)sum;
 
-    if (sum > 0xFFu) c->p |= F_C; else c->p &= (u8)~F_C;
+    if (sum > 0xFF) c->p |= F_C; else c->p &= (u8)~F_C;
     if (((~(c->a ^ v)) & (c->a ^ res) & 0x80) != 0) c->p |= F_V;
     else c->p &= (u8)~F_V;
 
@@ -561,24 +525,16 @@ void op_RTI(CPU6502* c, u16 a, bool h, bool p)
 }
 
 /* =========================
-   BRK
+   BRK (simple, not fully wired yet)
    ========================= */
 void op_BRK(CPU6502* c, u16 a, bool h, bool p)
 {
     (void)a;(void)h;(void)p;
-    // BRK is a 2-byte instruction; advance past padding byte.
-    c->pc++;
-    service_interrupt(c, 0xFFFE, true);
+    // For bring-up: treat BRK as jam so you can see it.
+    c->jammed = true;
 }
 
-void CPU6502_RequestNMI(CPU6502* c)
-{
-    if (!c) return;
-    c->nmi_pending = true;
-}
-
-void CPU6502_RequestIRQ(CPU6502* c)
-{
-    if (!c) return;
-    c->irq_pending = true;
-}
+/* =========================
+   One-byte implied ops not elsewhere
+   ========================= */
+void op_INY(CPU6502* c, u16 a, bool h, bool p); // already above

@@ -14,6 +14,10 @@ typedef struct CPU6502 {
     u64 cycles;
 
     bool jammed;
+
+    // External interrupt lines (latched by CPU step)
+    bool nmi_pending;
+    bool irq_pending;
 } CPU6502;
 
 // Status flags
@@ -31,6 +35,10 @@ enum {
 bool CPU6502_Init(CPU6502* c, Bus* bus);
 void CPU6502_Reset(CPU6502* c);
 int  CPU6502_Step(CPU6502* c);
+
+// Interrupt request lines
+void CPU6502_RequestNMI(CPU6502* c);
+void CPU6502_RequestIRQ(CPU6502* c);
 
 // ops referenced by cpu_tables.c
 void op_ILL(CPU6502* c, u16 addr, bool has_addr, bool page_cross);
