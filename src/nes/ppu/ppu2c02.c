@@ -3,14 +3,19 @@
 #include <string.h>
 
 enum {
-    PPUCTRL_VRAM_INC = 1u << 2,
-    PPUCTRL_BG_TABLE = 1u << 4,
-    PPUCTRL_NMI      = 1u << 7,
+    PPUCTRL_VRAM_INC  = 1u << 2,
+    PPUCTRL_SPR_TABLE = 1u << 3,
+    PPUCTRL_BG_TABLE  = 1u << 4,
+    PPUCTRL_NMI       = 1u << 7,
 
-    PPUMASK_BG_LEFT  = 1u << 1,
-    PPUMASK_BG_SHOW  = 1u << 3,
+    PPUMASK_BG_LEFT   = 1u << 1,
+    PPUMASK_SPR_LEFT  = 1u << 2,
+    PPUMASK_BG_SHOW   = 1u << 3,
+    PPUMASK_SPR_SHOW  = 1u << 4,
 
-    PPUSTATUS_VBLANK = 1u << 7
+    PPUSTATUS_SPROVERFLOW = 1u << 5,
+    PPUSTATUS_SPR0HIT     = 1u << 6,
+    PPUSTATUS_VBLANK      = 1u << 7
 };
 
 static const u32 k_nes_rgb[64] = {
@@ -35,16 +40,13 @@ static inline u16 mirror_nametable_addr(const PPU2C02* p, u16 addr)
 
     switch (m) {
         case NES_MIRROR_VERTICAL:
-            // NT0=0, NT1=1, NT2=0, NT3=1
             return (u16)(((table & 1u) * 0x0400u) + off);
 
         case NES_MIRROR_FOURSCREEN:
-            // We only have 2KB local memory for now; fall back to vertical mapping.
             return (u16)(((table & 1u) * 0x0400u) + off);
 
         case NES_MIRROR_HORIZONTAL:
         default:
-            // NT0=0, NT1=0, NT2=1, NT3=1
             return (u16)((((table >> 1) & 1u) * 0x0400u) + off);
     }
 }
@@ -179,6 +181,53 @@ static u8 bg_palette_index_at(PPU2C02* p, u16 v, u8 fine_x)
     return (u8)(((pal_hi << 2) | px) & 0x0Fu);
 }
 
+static bool sprite_palette_index_at(PPU2C02* p, int x, int y,
+                                    u8* out_pal_index, bool* out_behind_bg,
+                                    bool* out_sprite0, int* out_count)
+{
+    int found = 0;
+    for (int i = 0; i < 64; i++) {
+        int base = i * 4;
+        int sy = (int)p->oam[base] + 1;
+        int tile_x = (int)p->oam[base + 3];
+
+        if (y < sy || y >= sy + 8) continue;
+        if (x < tile_x || x >= tile_x + 8) continue;
+
+        found++;
+
+        int row = y - sy;
+        int col = x - tile_x;
+
+        u8 attr = p->oam[base + 2];
+        if (attr & 0x80u) row = 7 - row;
+        if (attr & 0x40u) col = 7 - col;
+
+        u8 tile = p->oam[base + 1];
+        u16 patt_addr = (u16)(((p->ctrl & PPUCTRL_SPR_TABLE) ? 0x1000u : 0x0000u)
+                              + (u16)tile * 16u + (u16)row);
+        u8 plane0 = ppu_mem_read(p, patt_addr);
+        u8 plane1 = ppu_mem_read(p, (u16)(patt_addr + 8u));
+
+        u8 bit = (u8)(7 - col);
+        u8 lo = (u8)((plane0 >> bit) & 1u);
+        u8 hi = (u8)((plane1 >> bit) & 1u);
+        u8 px = (u8)((hi << 1) | lo);
+
+        if (px == 0) continue;
+
+        u8 pal = (u8)(0x10u | ((attr & 0x03u) << 2) | px);
+        *out_pal_index = pal;
+        *out_behind_bg = (attr & 0x20u) != 0;
+        *out_sprite0 = (i == 0);
+        if (out_count) *out_count = found;
+        return true;
+    }
+
+    if (out_count) *out_count = found;
+    return false;
+}
+
 static void render_visible_dot(PPU2C02* p)
 {
     int x = p->cycle - 1;
@@ -186,15 +235,47 @@ static void render_visible_dot(PPU2C02* p)
     if (x < 0 || x >= PPU_FB_W || y < 0 || y >= PPU_FB_H) return;
 
     bool show_bg = (p->mask & PPUMASK_BG_SHOW) != 0;
+    bool show_spr = (p->mask & PPUMASK_SPR_SHOW) != 0;
     bool show_left_bg = (p->mask & PPUMASK_BG_LEFT) != 0;
+    bool show_left_spr = (p->mask & PPUMASK_SPR_LEFT) != 0;
 
-    u8 pal_index = 0u;
+    u8 bg_pal_index = 0u;
     if (show_bg && (show_left_bg || x >= 8)) {
         u8 fine_x = (u8)(((u8)x + p->x) & 7u);
-        pal_index = bg_palette_index_at(p, p->v, fine_x);
+        bg_pal_index = bg_palette_index_at(p, p->v, fine_x);
     }
 
-    p->fb[y * PPU_FB_W + x] = palette_color(p, pal_index);
+    u8 spr_pal_index = 0u;
+    bool spr_behind_bg = false;
+    bool spr0 = false;
+    int sprite_count = 0;
+    bool spr_hit = false;
+
+    if (show_spr && (show_left_spr || x >= 8)) {
+        spr_hit = sprite_palette_index_at(p, x, y, &spr_pal_index, &spr_behind_bg, &spr0, &sprite_count);
+    }
+
+    if (sprite_count > 8) {
+        p->status |= PPUSTATUS_SPROVERFLOW;
+    }
+
+    bool bg_opaque = bg_pal_index != 0u;
+    bool spr_opaque = spr_hit;
+
+    if (spr0 && bg_opaque && spr_opaque && x < 255) {
+        p->status |= PPUSTATUS_SPR0HIT;
+    }
+
+    u8 out_pal = 0u;
+    if (bg_opaque && spr_opaque) {
+        out_pal = spr_behind_bg ? bg_pal_index : spr_pal_index;
+    } else if (spr_opaque) {
+        out_pal = spr_pal_index;
+    } else if (bg_opaque) {
+        out_pal = bg_pal_index;
+    }
+
+    p->fb[y * PPU_FB_W + x] = palette_color(p, out_pal);
 }
 
 bool PPU2C02_Init(PPU2C02* p, Cart* cart)
@@ -341,7 +422,7 @@ void PPU2C02_Clock(PPU2C02* p)
 {
     if (!p) return;
 
-    bool rendering = (p->mask & PPUMASK_BG_SHOW) != 0;
+    bool rendering = (p->mask & (PPUMASK_BG_SHOW | PPUMASK_SPR_SHOW)) != 0;
     bool visible_scanline = (p->scanline >= 0 && p->scanline < 240);
     bool prerender_scanline = (p->scanline == -1);
 
@@ -355,12 +436,11 @@ void PPU2C02_Clock(PPU2C02* p)
         maybe_raise_nmi(p);
     }
 
-    // Pre-render line clears vblank at dot 1
+    // Pre-render line clears vblank and sprite flags at dot 1.
     if (prerender_scanline && p->cycle == 1) {
-        p->status = (u8)(p->status & (u8)~PPUSTATUS_VBLANK);
+        p->status = (u8)(p->status & (u8)~(PPUSTATUS_VBLANK | PPUSTATUS_SPR0HIT | PPUSTATUS_SPROVERFLOW));
     }
 
-    // Background address progression for visible/prerender lines.
     if (rendering && (visible_scanline || prerender_scanline)) {
         if (p->cycle >= 1 && p->cycle <= 256) {
             if ((p->cycle & 7) == 0) {
