@@ -1,0 +1,20 @@
+* text=auto eol=lf
+
+# C source
+*.c text eol=lf
+*.h text eol=lf
+
+# Makefiles
+Makefile text eol=lf
+makefile text eol=lf
+
+# Scripts
+*.sh text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.bmp binary
+*.nes binary
+*.zip binary
+*.7z binary
