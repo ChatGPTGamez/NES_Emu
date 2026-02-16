@@ -1,0 +1,540 @@
+#include "nes/cpu/cpu6502.h"
+#include "nes/cpu/cpu_tables.h"
+#include "nes/bus.h"
+#include "nes/log.h"
+
+static inline u8 rd(CPU6502* c, u16 a) { return Bus_CPURead(c->bus, a); }
+static inline void wr(CPU6502* c, u16 a, u8 v) { Bus_CPUWrite(c->bus, a, v); }
+
+static inline void set_zn(CPU6502* c, u8 v)
+{
+    if (v == 0) c->p |= F_Z; else c->p &= (u8)~F_Z;
+    if (v & 0x80) c->p |= F_N; else c->p &= (u8)~F_N;
+}
+
+static inline void push(CPU6502* c, u8 v)
+{
+    wr(c, (u16)(0x0100u | (u16)c->sp), v);
+    c->sp--;
+}
+
+static inline u8 pull(CPU6502* c)
+{
+    c->sp++;
+    return rd(c, (u16)(0x0100u | (u16)c->sp));
+}
+
+static inline u8 fetch8(CPU6502* c)
+{
+    u8 v = rd(c, c->pc);
+    c->pc++;
+    return v;
+}
+
+static inline u16 fetch16(CPU6502* c)
+{
+    u8 lo = fetch8(c);
+    u8 hi = fetch8(c);
+    return (u16)((u16)lo | ((u16)hi << 8));
+}
+
+// 6502 indirect JMP bug: high byte wraps within page
+static inline u16 read16_bug(CPU6502* c, u16 a)
+{
+    u8 lo = rd(c, a);
+    u16 a2 = (u16)((a & 0xFF00u) | ((a + 1) & 0x00FFu));
+    u8 hi = rd(c, a2);
+    return (u16)((u16)lo | ((u16)hi << 8));
+}
+
+static inline u16 read16_zp(CPU6502* c, u8 a)
+{
+    u8 lo = rd(c, (u16)a);
+    u8 hi = rd(c, (u16)(u8)(a + 1));
+    return (u16)((u16)lo | ((u16)hi << 8));
+}
+
+static inline u16 vec_read16(CPU6502* c, u16 a)
+{
+    u8 lo = rd(c, a);
+    u8 hi = rd(c, (u16)(a + 1));
+    return (u16)((u16)lo | ((u16)hi << 8));
+}
+
+bool CPU6502_Init(CPU6502* c, Bus* bus)
+{
+    if (!c || !bus) return false;
+    c->bus = bus;
+    c->pc = 0;
+    c->a = c->x = c->y = 0;
+    c->sp = 0xFD;
+    c->p = (u8)(F_I | F_U);
+    c->cycles = 0;
+    c->jammed = false;
+    return true;
+}
+
+void CPU6502_Reset(CPU6502* c)
+{
+    if (!c || !c->bus) return;
+
+    c->a = c->x = c->y = 0;
+    c->sp = 0xFD;
+    c->p = (u8)(F_I | F_U);
+    c->jammed = false;
+
+    c->pc = vec_read16(c, 0xFFFC);
+    c->cycles += 7;
+}
+
+// Address mode resolver: returns (addr, has_addr, page_cross)
+// For IMM: addr points to immediate byte in memory (pc already advanced)
+static inline void addr_resolve(CPU6502* c, AddrMode m, u16* out_addr, bool* out_has, bool* out_page_cross)
+{
+    *out_addr = 0;
+    *out_has = false;
+    *out_page_cross = false;
+
+    switch (m) {
+        case AM_IMP: return;
+        case AM_ACC: return;
+
+        case AM_IMM: {
+            *out_addr = c->pc;
+            c->pc++;
+            *out_has = true;
+        } return;
+
+        case AM_ZP: {
+            u8 a = fetch8(c);
+            *out_addr = (u16)a;
+            *out_has = true;
+        } return;
+
+        case AM_ZPX: {
+            u8 a = fetch8(c);
+            *out_addr = (u16)(u8)(a + c->x);
+            *out_has = true;
+        } return;
+
+        case AM_ZPY: {
+            u8 a = fetch8(c);
+            *out_addr = (u16)(u8)(a + c->y);
+            *out_has = true;
+        } return;
+
+        case AM_ABS: {
+            *out_addr = fetch16(c);
+            *out_has = true;
+        } return;
+
+        case AM_ABX: {
+            u16 base = fetch16(c);
+            u16 a = (u16)(base + c->x);
+            *out_page_cross = ((base & 0xFF00u) != (a & 0xFF00u));
+            *out_addr = a;
+            *out_has = true;
+        } return;
+
+        case AM_ABY: {
+            u16 base = fetch16(c);
+            u16 a = (u16)(base + c->y);
+            *out_page_cross = ((base & 0xFF00u) != (a & 0xFF00u));
+            *out_addr = a;
+            *out_has = true;
+        } return;
+
+        case AM_IND: {
+            u16 ptr = fetch16(c);
+            *out_addr = read16_bug(c, ptr);
+            *out_has = true;
+        } return;
+
+        case AM_IZX: {
+            u8 zp = fetch8(c);
+            u8 ptr = (u8)(zp + c->x);
+            *out_addr = read16_zp(c, ptr);
+            *out_has = true;
+        } return;
+
+        case AM_IZY: {
+            u8 zp = fetch8(c);
+            u16 base = read16_zp(c, zp);
+            u16 a = (u16)(base + c->y);
+            *out_page_cross = ((base & 0xFF00u) != (a & 0xFF00u));
+            *out_addr = a;
+            *out_has = true;
+        } return;
+
+        case AM_REL: {
+            // branch op reads signed offset itself in op_*
+            u8 off = fetch8(c);
+            *out_addr = (u16)off;
+            *out_has = true;
+        } return;
+    }
+}
+
+int CPU6502_Step(CPU6502* c)
+{
+    if (!c || !c->bus) return 0;
+    if (c->jammed) return 0;
+
+    u16 pc0 = c->pc;
+    u8 op = fetch8(c);
+
+    const OpInfo info = g_op_table[op];
+
+    u16 addr = 0;
+    bool has_addr = false;
+    bool page_cross = false;
+
+    // Relative branch uses addr as raw offset byte (already fetched by resolver)
+    addr_resolve(c, info.mode, &addr, &has_addr, &page_cross);
+
+    // Base cycles
+    int cyc = (int)info.cycles;
+
+    // Add page-cross cycle for certain read modes (not for stores; op may ignore it)
+    // We add it here and allow op to do nothing special.
+    if (page_cross) {
+        // Only modes where page cross matters: ABX/ABY/IZY for reads
+        // Stores on 6502 usually don't get the extra cycle; some do fixed.
+        // We’ll handle “read vs write” by letting STA/STX/STY ignore page_cross via table cycles.
+        // For simplicity: add extra cycle only for instructions that are not pure stores.
+        // (STA/STX/STY have fixed cycle counts already in table.)
+        if (info.fn != op_STA && info.fn != op_STX && info.fn != op_STY) {
+            cyc += 1;
+        }
+    }
+
+    if (!info.fn) {
+        NES_LOGE("CPU: null handler for opcode %02X at %04X", op, pc0);
+        c->jammed = true;
+        return 0;
+    }
+
+    info.fn(c, addr, has_addr, page_cross);
+
+    c->cycles += (u64)cyc;
+    return cyc;
+}
+
+/* =========================
+   Helpers for ops
+   ========================= */
+
+static inline u8 read_operand(CPU6502* c, u16 addr, bool has_addr, AddrMode mode)
+{
+    (void)has_addr;
+    if (mode == AM_IMM) return rd(c, addr);
+    return rd(c, addr);
+}
+
+static inline void branch(CPU6502* c, bool cond, u8 rel_raw)
+{
+    if (!cond) return;
+    s8 rel = (s8)rel_raw;
+    u16 old = c->pc;
+    c->pc = (u16)(c->pc + (s16)rel);
+    // Cycle penalties are handled imperfectly at table-level; we’ll do accurate timing later.
+    // But PC behavior is correct.
+    (void)old;
+}
+
+/* =========================
+   Illegal / NOP
+   ========================= */
+void op_ILL(CPU6502* c, u16 addr, bool has_addr, bool page_cross)
+{
+    (void)addr; (void)has_addr; (void)page_cross;
+    NES_LOGE("CPU: hit illegal/unsupported opcode at PC=%04X", (u16)(c->pc - 1));
+    c->jammed = true;
+}
+
+void op_NOP(CPU6502* c, u16 addr, bool has_addr, bool page_cross)
+{
+    (void)c; (void)addr; (void)has_addr; (void)page_cross;
+}
+
+/* =========================
+   Flag ops
+   ========================= */
+void op_CLC(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->p &= (u8)~F_C; }
+void op_SEC(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->p |= F_C; }
+void op_CLI(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->p &= (u8)~F_I; }
+void op_SEI(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->p |= F_I; }
+void op_CLV(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->p &= (u8)~F_V; }
+void op_CLD(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->p &= (u8)~F_D; }
+void op_SED(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->p |= F_D; }
+
+/* =========================
+   Loads / Stores
+   ========================= */
+void op_LDA(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has; (void)pcross;
+    c->a = rd(c, addr);
+    set_zn(c, c->a);
+}
+void op_LDX(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has; (void)pcross;
+    c->x = rd(c, addr);
+    set_zn(c, c->x);
+}
+void op_LDY(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has; (void)pcross;
+    c->y = rd(c, addr);
+    set_zn(c, c->y);
+}
+void op_STA(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has; (void)pcross;
+    wr(c, addr, c->a);
+}
+void op_STX(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has; (void)pcross;
+    wr(c, addr, c->x);
+}
+void op_STY(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has; (void)pcross;
+    wr(c, addr, c->y);
+}
+
+/* =========================
+   Transfers
+   ========================= */
+void op_TAX(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->x = c->a; set_zn(c,c->x); }
+void op_TAY(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->y = c->a; set_zn(c,c->y); }
+void op_TXA(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->a = c->x; set_zn(c,c->a); }
+void op_TYA(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->a = c->y; set_zn(c,c->a); }
+void op_TSX(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->x = c->sp; set_zn(c,c->x); }
+void op_TXS(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->sp = c->x; }
+
+/* =========================
+   Stack
+   ========================= */
+void op_PHA(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; push(c, c->a); }
+void op_PHP(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; push(c, (u8)(c->p | F_B | F_U)); }
+void op_PLA(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->a = pull(c); set_zn(c, c->a); }
+void op_PLP(CPU6502* c, u16 a, bool h, bool p)
+{
+    (void)a;(void)h;(void)p;
+    c->p = pull(c);
+    c->p |= F_U;
+    c->p &= (u8)~F_B;
+}
+
+/* =========================
+   Logic
+   ========================= */
+void op_AND(CPU6502* c, u16 addr, bool has, bool pcross) { (void)has;(void)pcross; c->a &= rd(c, addr); set_zn(c,c->a); }
+void op_ORA(CPU6502* c, u16 addr, bool has, bool pcross) { (void)has;(void)pcross; c->a |= rd(c, addr); set_zn(c,c->a); }
+void op_EOR(CPU6502* c, u16 addr, bool has, bool pcross) { (void)has;(void)pcross; c->a ^= rd(c, addr); set_zn(c,c->a); }
+void op_BIT(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has;(void)pcross;
+    u8 v = rd(c, addr);
+    u8 r = (u8)(c->a & v);
+    if (r == 0) c->p |= F_Z; else c->p &= (u8)~F_Z;
+    if (v & 0x80) c->p |= F_N; else c->p &= (u8)~F_N;
+    if (v & 0x40) c->p |= F_V; else c->p &= (u8)~F_V;
+}
+
+/* =========================
+   Compare
+   ========================= */
+static inline void cmp_set(CPU6502* c, u8 r, u8 v)
+{
+    u16 t = (u16)r - (u16)v;
+    if (r >= v) c->p |= F_C; else c->p &= (u8)~F_C;
+    set_zn(c, (u8)t);
+}
+void op_CMP(CPU6502* c, u16 addr, bool has, bool pcross) { (void)has;(void)pcross; cmp_set(c, c->a, rd(c, addr)); }
+void op_CPX(CPU6502* c, u16 addr, bool has, bool pcross) { (void)has;(void)pcross; cmp_set(c, c->x, rd(c, addr)); }
+void op_CPY(CPU6502* c, u16 addr, bool has, bool pcross) { (void)has;(void)pcross; cmp_set(c, c->y, rd(c, addr)); }
+
+/* =========================
+   ADC/SBC (binary; NES ignores BCD)
+   ========================= */
+void op_ADC(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has;(void)pcross;
+    u8 v = rd(c, addr);
+    u16 sum = (u16)c->a + (u16)v + (u16)((c->p & F_C) ? 1 : 0);
+    u8 res = (u8)sum;
+
+    if (sum > 0xFF) c->p |= F_C; else c->p &= (u8)~F_C;
+    // overflow: (~(A^V) & (A^R)) & 0x80
+    if (((~(c->a ^ v)) & (c->a ^ res) & 0x80) != 0) c->p |= F_V;
+    else c->p &= (u8)~F_V;
+
+    c->a = res;
+    set_zn(c, c->a);
+}
+
+void op_SBC(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has;(void)pcross;
+    u8 v = rd(c, addr) ^ 0xFFu;
+    u16 sum = (u16)c->a + (u16)v + (u16)((c->p & F_C) ? 1 : 0);
+    u8 res = (u8)sum;
+
+    if (sum > 0xFF) c->p |= F_C; else c->p &= (u8)~F_C;
+    if (((~(c->a ^ v)) & (c->a ^ res) & 0x80) != 0) c->p |= F_V;
+    else c->p &= (u8)~F_V;
+
+    c->a = res;
+    set_zn(c, c->a);
+}
+
+/* =========================
+   INC/DEC + reg inc/dec
+   ========================= */
+void op_INC(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has;(void)pcross;
+    u8 v = (u8)(rd(c, addr) + 1);
+    wr(c, addr, v);
+    set_zn(c, v);
+}
+void op_DEC(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has;(void)pcross;
+    u8 v = (u8)(rd(c, addr) - 1);
+    wr(c, addr, v);
+    set_zn(c, v);
+}
+void op_INX(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->x++; set_zn(c,c->x); }
+void op_INY(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->y++; set_zn(c,c->y); }
+void op_DEX(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->x--; set_zn(c,c->x); }
+void op_DEY(CPU6502* c, u16 a, bool h, bool p) { (void)a;(void)h;(void)p; c->y--; set_zn(c,c->y); }
+
+/* =========================
+   Shifts / rotates
+   ========================= */
+static inline u8 asl_u8(CPU6502* c, u8 v)
+{
+    if (v & 0x80) c->p |= F_C; else c->p &= (u8)~F_C;
+    v <<= 1;
+    set_zn(c, v);
+    return v;
+}
+static inline u8 lsr_u8(CPU6502* c, u8 v)
+{
+    if (v & 0x01) c->p |= F_C; else c->p &= (u8)~F_C;
+    v >>= 1;
+    set_zn(c, v);
+    return v;
+}
+static inline u8 rol_u8(CPU6502* c, u8 v)
+{
+    u8 carry = (c->p & F_C) ? 1u : 0u;
+    if (v & 0x80) c->p |= F_C; else c->p &= (u8)~F_C;
+    v = (u8)((v << 1) | carry);
+    set_zn(c, v);
+    return v;
+}
+static inline u8 ror_u8(CPU6502* c, u8 v)
+{
+    u8 carry = (c->p & F_C) ? 0x80u : 0u;
+    if (v & 0x01) c->p |= F_C; else c->p &= (u8)~F_C;
+    v = (u8)((v >> 1) | carry);
+    set_zn(c, v);
+    return v;
+}
+
+void op_ASL(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)pcross;
+    if (!has) { c->a = asl_u8(c, c->a); return; }
+    u8 v = rd(c, addr);
+    v = asl_u8(c, v);
+    wr(c, addr, v);
+}
+void op_LSR(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)pcross;
+    if (!has) { c->a = lsr_u8(c, c->a); return; }
+    u8 v = rd(c, addr);
+    v = lsr_u8(c, v);
+    wr(c, addr, v);
+}
+void op_ROL(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)pcross;
+    if (!has) { c->a = rol_u8(c, c->a); return; }
+    u8 v = rd(c, addr);
+    v = rol_u8(c, v);
+    wr(c, addr, v);
+}
+void op_ROR(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)pcross;
+    if (!has) { c->a = ror_u8(c, c->a); return; }
+    u8 v = rd(c, addr);
+    v = ror_u8(c, v);
+    wr(c, addr, v);
+}
+
+/* =========================
+   Branches (addr contains raw rel byte)
+   ========================= */
+void op_BNE(CPU6502* c, u16 rel, bool has, bool pcross){(void)has;(void)pcross; branch(c, (c->p & F_Z)==0, (u8)rel);}
+void op_BEQ(CPU6502* c, u16 rel, bool has, bool pcross){(void)has;(void)pcross; branch(c, (c->p & F_Z)!=0, (u8)rel);}
+void op_BPL(CPU6502* c, u16 rel, bool has, bool pcross){(void)has;(void)pcross; branch(c, (c->p & F_N)==0, (u8)rel);}
+void op_BMI(CPU6502* c, u16 rel, bool has, bool pcross){(void)has;(void)pcross; branch(c, (c->p & F_N)!=0, (u8)rel);}
+void op_BCC(CPU6502* c, u16 rel, bool has, bool pcross){(void)has;(void)pcross; branch(c, (c->p & F_C)==0, (u8)rel);}
+void op_BCS(CPU6502* c, u16 rel, bool has, bool pcross){(void)has;(void)pcross; branch(c, (c->p & F_C)!=0, (u8)rel);}
+void op_BVC(CPU6502* c, u16 rel, bool has, bool pcross){(void)has;(void)pcross; branch(c, (c->p & F_V)==0, (u8)rel);}
+void op_BVS(CPU6502* c, u16 rel, bool has, bool pcross){(void)has;(void)pcross; branch(c, (c->p & F_V)!=0, (u8)rel);}
+
+/* =========================
+   Jumps / subroutines
+   ========================= */
+void op_JMP(CPU6502* c, u16 addr, bool has, bool pcross){(void)has;(void)pcross; c->pc = addr;}
+void op_JSR(CPU6502* c, u16 addr, bool has, bool pcross)
+{
+    (void)has;(void)pcross;
+    u16 ret = (u16)(c->pc - 1);
+    push(c, (u8)((ret >> 8) & 0xFF));
+    push(c, (u8)(ret & 0xFF));
+    c->pc = addr;
+}
+void op_RTS(CPU6502* c, u16 a, bool h, bool p)
+{
+    (void)a;(void)h;(void)p;
+    u8 lo = pull(c);
+    u8 hi = pull(c);
+    c->pc = (u16)(((u16)hi << 8) | lo);
+    c->pc++;
+}
+void op_RTI(CPU6502* c, u16 a, bool h, bool p)
+{
+    (void)a;(void)h;(void)p;
+    c->p = pull(c);
+    c->p |= F_U;
+    c->p &= (u8)~F_B;
+    u8 lo = pull(c);
+    u8 hi = pull(c);
+    c->pc = (u16)(((u16)hi << 8) | lo);
+}
+
+/* =========================
+   BRK (simple, not fully wired yet)
+   ========================= */
+void op_BRK(CPU6502* c, u16 a, bool h, bool p)
+{
+    (void)a;(void)h;(void)p;
+    // For bring-up: treat BRK as jam so you can see it.
+    c->jammed = true;
+}
+
+/* =========================
+   One-byte implied ops not elsewhere
+   ========================= */
+void op_INY(CPU6502* c, u16 a, bool h, bool p); // already above
