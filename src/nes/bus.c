@@ -2,6 +2,10 @@
 #include "nes/cart.h"
 #include <string.h>
 
+enum {
+    APU_FRAME_IRQ_PERIOD_CPU = 29830
+};
+
 static void latch_controllers(Bus* b)
 {
     // NES controller latch: bit0=A ... bit7=Right (matches our NesInput mapping)
@@ -62,6 +66,12 @@ void Bus_Reset(Bus* b)
     b->dma_page = 0;
     b->cpu_cycle_parity = 0;
 
+    b->apu_status = 0;
+    b->apu_frame_counter = 0;
+    b->apu_frame_irq_pending = false;
+    b->apu_frame_irq_inhibit = false;
+    b->apu_frame_divider = 0;
+
     b->input.p1 = 0;
 
     PPU2C02_Reset(&b->ppu);
@@ -100,6 +110,31 @@ bool Bus_DMATick(Bus* b)
     return true;
 }
 
+bool Bus_APUTick(Bus* b)
+{
+    if (!b) return false;
+
+    // Minimal frame-counter IRQ model:
+    // - only active in 4-step mode (bit 7 = 0)
+    // - inhibited by bit 6 of $4017
+    // - roughly one IRQ pulse per frame-counter sequence
+    b->apu_frame_divider++;
+    if (b->apu_frame_divider >= (u32)APU_FRAME_IRQ_PERIOD_CPU) {
+        b->apu_frame_divider = 0;
+
+        bool five_step_mode = (b->apu_frame_counter & 0x80u) != 0;
+        if (!five_step_mode && !b->apu_frame_irq_inhibit) {
+            b->apu_frame_irq_pending = true;
+        }
+    }
+
+    if (b->apu_frame_irq_pending && !b->apu_frame_irq_inhibit) {
+        return true;
+    }
+
+    return false;
+}
+
 u8 Bus_CPURead(Bus* b, u16 addr)
 {
     if (!b) return 0;
@@ -120,6 +155,15 @@ u8 Bus_CPURead(Bus* b, u16 addr)
 
     // $4000-$4017: APU/IO
     if (addr >= 0x4000 && addr <= 0x4017) {
+        // $4015: APU status
+        if (addr == 0x4015) {
+            u8 irq_bit = b->apu_frame_irq_pending ? 0x40u : 0x00u;
+            u8 v = (u8)((b->open_bus & 0x20u) | irq_bit | (b->apu_status & 0x1Fu));
+            b->apu_frame_irq_pending = false;
+            b->open_bus = v;
+            return v;
+        }
+
         // $4016: controller port 1
         if (addr == 0x4016) {
             // If strobe high, always return current A button in bit0
@@ -185,6 +229,12 @@ void Bus_CPUWrite(Bus* b, u16 addr, u8 data)
             return;
         }
 
+        // $4015: APU status/control
+        if (addr == 0x4015) {
+            b->apu_status = (u8)(data & 0x1Fu);
+            return;
+        }
+
         // $4016: controller strobe
         if (addr == 0x4016) {
             bool old_strobe = b->controller_strobe;
@@ -198,6 +248,17 @@ void Bus_CPUWrite(Bus* b, u16 addr, u8 data)
                 // Latch once on high->low transition
                 latch_controllers(b);
             }
+            return;
+        }
+
+        // $4017: APU frame counter
+        if (addr == 0x4017) {
+            b->apu_frame_counter = data;
+            b->apu_frame_irq_inhibit = (data & 0x40u) != 0;
+            if (b->apu_frame_irq_inhibit) {
+                b->apu_frame_irq_pending = false;
+            }
+            b->apu_frame_divider = 0;
             return;
         }
 

@@ -31,6 +31,13 @@ typedef struct Bus {
     // CPU-cycle parity tracker (0 = even, 1 = odd)
     u8 cpu_cycle_parity;
 
+    // Minimal APU/frame-counter state
+    u8 apu_status;               // $4015 write-side channel enable bits
+    u8 apu_frame_counter;        // $4017 last written value
+    bool apu_frame_irq_pending;  // frame IRQ flag (visible in $4015 bit 6)
+    bool apu_frame_irq_inhibit;  // $4017 bit 6
+    u32 apu_frame_divider;       // CPU-cycle divider for frame IRQ cadence
+
     // Snapshot of current input (set each frame)
     NesInput input;
 } Bus;
@@ -42,6 +49,7 @@ void Bus_SetCart(Bus* b, Cart* cart);
 void Bus_SetInput(Bus* b, NesInput input);
 
 bool Bus_DMATick(Bus* b);
+bool Bus_APUTick(Bus* b);
 
 // CPU read/write (the 6502 will call these)
 u8   Bus_CPURead(Bus* b, u16 addr);

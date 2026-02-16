@@ -17,15 +17,21 @@ static void consume_cpu_cycles_for_timing(Nes* n, int cpu_cycles)
 {
     if (!n || cpu_cycles <= 0) return;
 
-    clock_ppu_and_nmi(n, cpu_cycles * 3);
-    n->bus.cpu_cycle_parity = (u8)((n->bus.cpu_cycle_parity + (u8)(cpu_cycles & 1)) & 1u);
+    for (int i = 0; i < cpu_cycles; i++) {
+        if (Bus_APUTick(&n->bus)) {
+            CPU6502_RequestIRQ(&n->cpu);
+        }
+
+        clock_ppu_and_nmi(n, 3);
+        n->bus.cpu_cycle_parity ^= 1u;
+    }
 }
 
 static void NES_Clock(Nes* n)
 {
     if (!n) return;
 
-    // During OAM DMA, CPU is stalled but PPU/NMI timing continues.
+    // During OAM DMA, CPU is stalled but PPU/NMI/APU timing continues.
     if (Bus_DMATick(&n->bus)) {
         consume_cpu_cycles_for_timing(n, 1);
         return;
