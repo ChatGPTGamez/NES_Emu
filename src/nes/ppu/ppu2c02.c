@@ -7,6 +7,9 @@ enum {
     PPUCTRL_BG_TABLE = 1u << 4,
     PPUCTRL_NMI      = 1u << 7,
 
+    PPUMASK_BG_LEFT  = 1u << 1,
+    PPUMASK_BG_SHOW  = 1u << 3,
+
     PPUSTATUS_VBLANK = 1u << 7
 };
 
@@ -15,9 +18,9 @@ static const u32 k_nes_rgb[64] = {
     0xFF202A00u, 0xFF083A00u, 0xFF004000u, 0xFF003C00u, 0xFF00323Cu, 0xFF000000u, 0xFF000000u, 0xFF000000u,
     0xFF989698u, 0xFF084CC4u, 0xFF3032ECu, 0xFF5C1EE4u, 0xFF8814B0u, 0xFFA01464u, 0xFF982220u, 0xFF783C00u,
     0xFF545A00u, 0xFF287200u, 0xFF087C00u, 0xFF007628u, 0xFF006678u, 0xFF000000u, 0xFF000000u, 0xFF000000u,
-    0xFFECEEECu, 0xFF4C9AECu, 0xFF787CEC,  0xFFB062ECu, 0xFFE454ECu, 0xFFEC58B4u, 0xFFEC6A64u, 0xFFD48820u,
+    0xFFECEEECu, 0xFF4C9AECu, 0xFF787CECu, 0xFFB062ECu, 0xFFE454ECu, 0xFFEC58B4u, 0xFFEC6A64u, 0xFFD48820u,
     0xFFA0AA00u, 0xFF74C400u, 0xFF4CD020u, 0xFF38CC6Cu, 0xFF38B4CCu, 0xFF3C3C3Cu, 0xFF000000u, 0xFF000000u,
-    0xFFECEEECu, 0xFFA8CCECu, 0xFFBCBCEC,  0xFFD4B2F4u, 0xFFECAEECu, 0xFFECAED4u, 0xFFECB4B0u, 0xFFE4C490u,
+    0xFFECEEECu, 0xFFA8CCECu, 0xFFBCBCECu, 0xFFD4B2F4u, 0xFFECAEECu, 0xFFECAED4u, 0xFFECB4B0u, 0xFFE4C490u,
     0xFFCCD278u, 0xFFB4DE78u, 0xFFA8E290u, 0xFF98E2B4u, 0xFFA0D6E4u, 0xFFA0A2A0u, 0xFF000000u, 0xFF000000u
 };
 
@@ -107,44 +110,91 @@ static u32 palette_color(PPU2C02* p, u8 pal_index)
     return k_nes_rgb[entry & 0x3Fu];
 }
 
-static void render_background_frame(PPU2C02* p)
+static void inc_coarse_x(PPU2C02* p)
 {
-    const u16 nt_base = 0x2000u;
-    const u16 attr_base = 0x23C0u;
-    const u16 pattern_base = (p->ctrl & PPUCTRL_BG_TABLE) ? 0x1000u : 0x0000u;
-
-    for (int y = 0; y < PPU_FB_H; y++) {
-        int tile_y = y >> 3;
-        int fine_y = y & 7;
-
-        for (int x = 0; x < PPU_FB_W; x++) {
-            int tile_x = x >> 3;
-            int fine_x = x & 7;
-
-            u16 nt_addr = (u16)(nt_base + (u16)(tile_y * 32 + tile_x));
-            u8 tile_id = ppu_mem_read(p, nt_addr);
-
-            u16 attr_addr = (u16)(attr_base + (u16)((tile_y >> 2) * 8 + (tile_x >> 2)));
-            u8 attr = ppu_mem_read(p, attr_addr);
-            u8 shift = (u8)(((tile_y & 0x02) ? 4 : 0) + ((tile_x & 0x02) ? 2 : 0));
-            u8 pal_hi = (u8)((attr >> shift) & 0x03u);
-
-            u16 patt_addr = (u16)(pattern_base + (u16)tile_id * 16u + (u16)fine_y);
-            u8 plane0 = ppu_mem_read(p, patt_addr);
-            u8 plane1 = ppu_mem_read(p, (u16)(patt_addr + 8u));
-
-            u8 bit = (u8)(7 - fine_x);
-            u8 lo = (u8)((plane0 >> bit) & 1u);
-            u8 hi = (u8)((plane1 >> bit) & 1u);
-            u8 px = (u8)((hi << 1) | lo);
-
-            u8 pal_index = (px == 0)
-                ? 0u
-                : (u8)(((pal_hi << 2) | px) & 0x0Fu);
-
-            p->fb[y * PPU_FB_W + x] = palette_color(p, pal_index);
-        }
+    if ((p->v & 0x001Fu) == 31u) {
+        p->v &= (u16)~0x001Fu;
+        p->v ^= 0x0400u;
+    } else {
+        p->v++;
     }
+}
+
+static void inc_y(PPU2C02* p)
+{
+    if ((p->v & 0x7000u) != 0x7000u) {
+        p->v += 0x1000u;
+        return;
+    }
+
+    p->v &= (u16)~0x7000u;
+    u16 y = (u16)((p->v & 0x03E0u) >> 5);
+
+    if (y == 29u) {
+        y = 0u;
+        p->v ^= 0x0800u;
+    } else if (y == 31u) {
+        y = 0u;
+    } else {
+        y++;
+    }
+
+    p->v = (u16)((p->v & (u16)~0x03E0u) | (u16)(y << 5));
+}
+
+static void copy_x(PPU2C02* p)
+{
+    p->v = (u16)((p->v & (u16)~0x041Fu) | (p->t & 0x041Fu));
+}
+
+static void copy_y(PPU2C02* p)
+{
+    p->v = (u16)((p->v & (u16)~0x7BE0u) | (p->t & 0x7BE0u));
+}
+
+static u8 bg_palette_index_at(PPU2C02* p, u16 v, u8 fine_x)
+{
+    u16 nt_addr = (u16)(0x2000u | (v & 0x0FFFu));
+    u8 tile_id = ppu_mem_read(p, nt_addr);
+
+    u16 attr_addr = (u16)(0x23C0u | (v & 0x0C00u) | ((v >> 4) & 0x38u) | ((v >> 2) & 0x07u));
+    u8 attr = ppu_mem_read(p, attr_addr);
+
+    u8 quadrant_shift = (u8)(((v >> 4) & 4u) | (v & 2u));
+    u8 pal_hi = (u8)((attr >> quadrant_shift) & 0x03u);
+
+    u8 fine_y = (u8)((v >> 12) & 0x07u);
+    u16 patt_addr = (u16)(((p->ctrl & PPUCTRL_BG_TABLE) ? 0x1000u : 0x0000u)
+                          + (u16)tile_id * 16u + fine_y);
+
+    u8 plane0 = ppu_mem_read(p, patt_addr);
+    u8 plane1 = ppu_mem_read(p, (u16)(patt_addr + 8u));
+
+    u8 bit = (u8)(7u - (fine_x & 7u));
+    u8 lo = (u8)((plane0 >> bit) & 1u);
+    u8 hi = (u8)((plane1 >> bit) & 1u);
+    u8 px = (u8)((hi << 1) | lo);
+
+    if (px == 0) return 0u;
+    return (u8)(((pal_hi << 2) | px) & 0x0Fu);
+}
+
+static void render_visible_dot(PPU2C02* p)
+{
+    int x = p->cycle - 1;
+    int y = p->scanline;
+    if (x < 0 || x >= PPU_FB_W || y < 0 || y >= PPU_FB_H) return;
+
+    bool show_bg = (p->mask & PPUMASK_BG_SHOW) != 0;
+    bool show_left_bg = (p->mask & PPUMASK_BG_LEFT) != 0;
+
+    u8 pal_index = 0u;
+    if (show_bg && (show_left_bg || x >= 8)) {
+        u8 fine_x = (u8)(((u8)x + p->x) & 7u);
+        pal_index = bg_palette_index_at(p, p->v, fine_x);
+    }
+
+    p->fb[y * PPU_FB_W + x] = palette_color(p, pal_index);
 }
 
 bool PPU2C02_Init(PPU2C02* p, Cart* cart)
@@ -291,6 +341,14 @@ void PPU2C02_Clock(PPU2C02* p)
 {
     if (!p) return;
 
+    bool rendering = (p->mask & PPUMASK_BG_SHOW) != 0;
+    bool visible_scanline = (p->scanline >= 0 && p->scanline < 240);
+    bool prerender_scanline = (p->scanline == -1);
+
+    if (visible_scanline && p->cycle >= 1 && p->cycle <= 256) {
+        render_visible_dot(p);
+    }
+
     // VBlank start at scanline 241, dot 1
     if (p->scanline == 241 && p->cycle == 1) {
         p->status = (u8)(p->status | PPUSTATUS_VBLANK);
@@ -298,8 +356,28 @@ void PPU2C02_Clock(PPU2C02* p)
     }
 
     // Pre-render line clears vblank at dot 1
-    if (p->scanline == -1 && p->cycle == 1) {
+    if (prerender_scanline && p->cycle == 1) {
         p->status = (u8)(p->status & (u8)~PPUSTATUS_VBLANK);
+    }
+
+    // Background address progression for visible/prerender lines.
+    if (rendering && (visible_scanline || prerender_scanline)) {
+        if (p->cycle >= 1 && p->cycle <= 256) {
+            if ((p->cycle & 7) == 0) {
+                inc_coarse_x(p);
+            }
+            if (p->cycle == 256) {
+                inc_y(p);
+            }
+        }
+
+        if (p->cycle == 257) {
+            copy_x(p);
+        }
+
+        if (prerender_scanline && p->cycle >= 280 && p->cycle <= 304) {
+            copy_y(p);
+        }
     }
 
     p->cycle++;
@@ -310,7 +388,6 @@ void PPU2C02_Clock(PPU2C02* p)
         if (p->scanline > 260) {
             p->scanline = -1;
             p->frame_count++;
-            render_background_frame(p);
             p->frame_complete = true;
         }
     }

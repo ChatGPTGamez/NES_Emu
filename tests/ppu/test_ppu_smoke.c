@@ -66,23 +66,39 @@ static void test_vblank_sets_frame_and_nmi(void)
     }
 }
 
-static void test_frame_render_uses_palette_backdrop(void)
+static void test_visible_dot_render_uses_backdrop_when_bg_disabled(void)
 {
     PPU2C02 p;
     assert(PPU2C02_Init(&p, NULL));
 
-    // CHR reads resolve to 0 with no cart, so all pixels are background color 0.
     p.palette[0] = 0x01u;
+    p.scanline = 0;
+    p.cycle = 1;
+    p.mask = 0x00u; // background disabled
 
-    p.scanline = 260;
-    p.cycle = 340;
+    PPU2C02_Clock(&p);
+    assert(p.fb[0] == 0xFF001E74u);
+}
+
+static void test_scroll_copy_x_on_cycle_257(void)
+{
+    PPU2C02 p;
+    assert(PPU2C02_Init(&p, NULL));
+
+    p.mask = 0x08u; // show background enables address progression
+
+    // write t: coarse x=5, nt_x=1
+    PPU2C02_CPUWrite(&p, 0x2006, 0x04);
+    PPU2C02_CPUWrite(&p, 0x2006, 0x05);
+
+    // force v to different coarse x / nt_x so copy_x is visible
+    p.v = 0x0000u;
+
+    p.scanline = 0;
+    p.cycle = 257;
     PPU2C02_Clock(&p);
 
-    assert(PPU2C02_FrameComplete(&p));
-
-    u32 c = p.fb[0];
-    assert(c == 0xFF001E74u);
-    assert(p.fb[(PPU_FB_H - 1) * PPU_FB_W + (PPU_FB_W - 1)] == c);
+    assert((p.v & 0x041Fu) == (p.t & 0x041Fu));
 }
 
 int main(void)
@@ -91,7 +107,8 @@ int main(void)
     test_ppuaddr_ppudata_increment_1();
     test_ppuctrl_increment_32_mode();
     test_vblank_sets_frame_and_nmi();
-    test_frame_render_uses_palette_backdrop();
+    test_visible_dot_render_uses_backdrop_when_bg_disabled();
+    test_scroll_copy_x_on_cycle_257();
     puts("ppu smoke: OK");
     return 0;
 }
