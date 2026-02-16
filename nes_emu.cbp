@@ -32,7 +32,100 @@
 		<Compiler>
 			<Add option="-Wall" />
 		</Compiler>
-		<Unit filename="main.c">
+		<Unit filename="include/nes/apu/apu2a03.h" />
+		<Unit filename="include/nes/bus.h" />
+		<Unit filename="include/nes/cart.h" />
+		<Unit filename="include/nes/clock.h" />
+		<Unit filename="include/nes/common.h" />
+		<Unit filename="include/nes/config.h" />
+		<Unit filename="include/nes/cpu/cpu6502.h" />
+		<Unit filename="include/nes/cpu/cpu_tables.h" />
+		<Unit filename="include/nes/debug/debugger.h" />
+		<Unit filename="include/nes/debug/trace.h" />
+		<Unit filename="include/nes/frontend/sdl_app.h" />
+		<Unit filename="include/nes/frontend/sdl_audio.h" />
+		<Unit filename="include/nes/frontend/sdl_video.h" />
+		<Unit filename="include/nes/ines.h" />
+		<Unit filename="include/nes/input.h" />
+		<Unit filename="include/nes/log.h" />
+		<Unit filename="include/nes/mapper.h" />
+		<Unit filename="include/nes/nes.h" />
+		<Unit filename="include/nes/ppu/palette.h" />
+		<Unit filename="include/nes/ppu/ppu2c02.h" />
+		<Unit filename="include/nes/ppu/ppu_regs.h" />
+		<Unit filename="include/nes/util/bitops.h" />
+		<Unit filename="include/nes/util/file.h" />
+		<Unit filename="include/nes/util/ringbuf.h" />
+		<Unit filename="src/main.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/apu/apu2a03.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/bus.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/cart.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/clock.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/cpu/cpu6502.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/cpu/cpu_tables.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/debug/debugger.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/debug/trace.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/frontend/sdl_app.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/frontend/sdl_audio.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/frontend/sdl_video.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/ines.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/input.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/mapper.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/mapper_nrom.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/nes.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/ppu/palette.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/ppu/ppu2c02.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/util/file.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/nes/util/ringbuf.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="tests/cpu/test_cpu_smoke.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="tests/ppu/test_ppu_smoke.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="tools/rominfo/rominfo.c">
 			<Option compilerVar="CC" />
 		</Unit>
 		<Extensions>

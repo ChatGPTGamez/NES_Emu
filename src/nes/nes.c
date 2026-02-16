@@ -7,6 +7,13 @@ static u32 pack_argb(u8 a, u8 r, u8 g, u8 b)
     return ((u32)a << 24) | ((u32)r << 16) | ((u32)g << 8) | (u32)b;
 }
 
+// NTSC NES CPU is ~29,780.5 cycles/frame. Until PPU-driven frame timing exists,
+// dither frame budgets between 29,780 and 29,781 cycles.
+static int frame_cpu_budget(const Nes* n)
+{
+    return 29780 + (int)(n->frame_count & 1u);
+}
+
 bool NES_Init(Nes* n)
 {
     if (!n) return false;
@@ -57,10 +64,14 @@ void NES_RunFrame(Nes* n)
     // Feed input to bus ($4016)
     Bus_SetInput(&n->bus, n->input);
 
-    // --- TEMP bring-up: execute a fixed number of CPU instructions per "frame"
-    // This is NOT final timing. Just to prove reset code runs.
-    for (int i = 0; i < 5000 && !n->cpu.jammed; i++) {
-        CPU6502_Step(&n->cpu);
+    // TEMP: run CPU to an approximate per-frame cycle budget.
+    // Final timing should be PPU/APU driven via a shared master clock.
+    int budget = frame_cpu_budget(n);
+    int used = 0;
+    while (used < budget && !n->cpu.jammed) {
+        int step = CPU6502_Step(&n->cpu);
+        if (step <= 0) break;
+        used += step;
     }
 
     // Placeholder visuals: show whether CPU is alive or jammed
