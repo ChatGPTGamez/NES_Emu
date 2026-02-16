@@ -1,20 +1,26 @@
+# Force LF everywhere by default
 * text=auto eol=lf
 
-# C source
+# Source / headers
 *.c text eol=lf
 *.h text eol=lf
 
-# Makefiles
+# Build + scripts
 Makefile text eol=lf
 makefile text eol=lf
-
-# Scripts
+*.mk text eol=lf
 *.sh text eol=lf
 
-# Binary files
+# Common text
+*.md text eol=lf
+*.txt text eol=lf
+
+# Binary (never touch line endings)
 *.png binary
 *.jpg binary
+*.jpeg binary
 *.bmp binary
+*.gif binary
 *.nes binary
 *.zip binary
 *.7z binary
