@@ -1,5 +1,6 @@
 #include "nes/nes.h"
 #include "nes/log.h"
+#include "nes/ppu/ppu2c02.h"
 #include <string.h>
 
 static u32 pack_argb(u8 a, u8 r, u8 g, u8 b)
@@ -7,11 +8,20 @@ static u32 pack_argb(u8 a, u8 r, u8 g, u8 b)
     return ((u32)a << 24) | ((u32)r << 16) | ((u32)g << 8) | (u32)b;
 }
 
-// NTSC NES CPU is ~29,780.5 cycles/frame. Until PPU-driven frame timing exists,
-// dither frame budgets between 29,780 and 29,781 cycles.
-static int frame_cpu_budget(const Nes* n)
+static void NES_Clock(Nes* n)
 {
-    return 29780 + (int)(n->frame_count & 1u);
+    if (!n) return;
+    if (n->cpu.jammed) return;
+
+    int cpu_cycles = CPU6502_Step(&n->cpu);
+    if (cpu_cycles <= 0) return;
+
+    for (int i = 0; i < cpu_cycles * 3; i++) {
+        PPU2C02_Clock(&n->bus.ppu);
+        if (PPU2C02_PollNMI(&n->bus.ppu)) {
+            CPU6502_RequestNMI(&n->cpu);
+        }
+    }
 }
 
 bool NES_Init(Nes* n)
@@ -64,17 +74,14 @@ void NES_RunFrame(Nes* n)
     // Feed input to bus ($4016)
     Bus_SetInput(&n->bus, n->input);
 
-    // TEMP: run CPU to an approximate per-frame cycle budget.
-    // Final timing should be PPU/APU driven via a shared master clock.
-    int budget = frame_cpu_budget(n);
-    int used = 0;
-    while (used < budget && !n->cpu.jammed) {
-        int step = CPU6502_Step(&n->cpu);
-        if (step <= 0) break;
-        used += step;
+    PPU2C02_ClearFrameComplete(&n->bus.ppu);
+
+    // Frame execution is now driven by the PPU frame boundary.
+    while (!PPU2C02_FrameComplete(&n->bus.ppu) && !n->cpu.jammed) {
+        NES_Clock(n);
     }
 
-    // Placeholder visuals: show whether CPU is alive or jammed
+    // Placeholder visuals until full renderer output is wired through the PPU path.
     bool jam = n->cpu.jammed;
 
     u8 base = jam ? 40u : 0u;
@@ -86,7 +93,6 @@ void NES_RunFrame(Nes* n)
             u8 g = (u8)(((y + (int)(t >> 1)) & 255) >> 2);
             u8 b = (u8)(((x ^ y ^ (int)t) & 255) >> 2);
 
-            // If jammed, tint red so it's obvious
             if (jam) {
                 r = (u8)(r + 120u);
                 g = (u8)(g + base);
@@ -97,7 +103,6 @@ void NES_RunFrame(Nes* n)
         }
     }
 
-    // Draw a simple "PC bar" at top: length depends on low byte of PC
     int w = 16 + (n->cpu.pc & 0xFF);
     if (w > NES_FB_W - 16) w = NES_FB_W - 16;
     for (int y = 8; y < 16; y++) {

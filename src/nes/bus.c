@@ -9,11 +9,26 @@ static void latch_controllers(Bus* b)
     b->controller_shift_p1 = b->controller_latch_p1;
 }
 
+static void perform_oam_dma(Bus* b, u8 page)
+{
+    // CPU writes page to $4014; DMA copies 256 bytes from page<<8 to PPU OAM.
+    // Cycle stealing is not modeled yet; this is functional data transfer only.
+    u16 base = (u16)((u16)page << 8);
+    for (u16 i = 0; i < 256u; i++) {
+        u8 v = Bus_CPURead(b, (u16)(base + i));
+        b->ppu.oam[b->ppu.oam_addr] = v;
+        b->ppu.oam_addr++;
+    }
+}
+
 bool Bus_Init(Bus* b, Cart* cart)
 {
     if (!b) return false;
     memset(b, 0, sizeof(*b));
     b->cart = cart;
+
+    if (!PPU2C02_Init(&b->ppu, cart)) return false;
+
     Bus_Reset(b);
     return true;
 }
@@ -21,8 +36,8 @@ bool Bus_Init(Bus* b, Cart* cart)
 void Bus_Reset(Bus* b)
 {
     if (!b) return;
+
     memset(b->ram, 0, sizeof(b->ram));
-    memset(b->ppu_regs, 0, sizeof(b->ppu_regs));
     b->open_bus = 0;
 
     b->controller_latch_p1 = 0;
@@ -30,12 +45,15 @@ void Bus_Reset(Bus* b)
     b->controller_strobe = false;
 
     b->input.p1 = 0;
+
+    PPU2C02_Reset(&b->ppu);
 }
 
 void Bus_SetCart(Bus* b, Cart* cart)
 {
     if (!b) return;
     b->cart = cart;
+    PPU2C02_SetCart(&b->ppu, cart);
 }
 
 void Bus_SetInput(Bus* b, NesInput input)
@@ -61,15 +79,8 @@ u8 Bus_CPURead(Bus* b, u16 addr)
     }
 
     // $2000-$3FFF: PPU regs (mirrored every 8 bytes)
-    // NOTE: Stub only. Real PPU will replace this behavior.
     if (addr >= 0x2000 && addr <= 0x3FFF) {
-        u16 r = (u16)(0x2000u + (addr & 7u));
-        u8 idx = (u8)(r & 7u);
-
-        u8 v = b->ppu_regs[idx];
-
-        // Typical special-case: $2002 (PPUSTATUS) read clears vblank in real HW.
-        // We do nothing yet; just return stub content.
+        u8 v = PPU2C02_CPURead(&b->ppu, addr, b->open_bus);
         b->open_bus = v;
         return v;
     }
@@ -129,29 +140,29 @@ void Bus_CPUWrite(Bus* b, u16 addr, u8 data)
 
     // $2000-$3FFF: PPU regs (mirrored)
     if (addr >= 0x2000 && addr <= 0x3FFF) {
-        u16 r = (u16)(0x2000u + (addr & 7u));
-        u8 idx = (u8)(r & 7u);
-        b->ppu_regs[idx] = data;
+        PPU2C02_CPUWrite(&b->ppu, addr, data);
         return;
     }
 
     // $4000-$4017: APU/IO
     if (addr >= 0x4000 && addr <= 0x4017) {
-        // $4014: OAMDMA (PPU sprite DMA) - stub ignore for now
+        // $4014: OAMDMA
         if (addr == 0x4014) {
+            perform_oam_dma(b, data);
             return;
         }
 
         // $4016: controller strobe
         if (addr == 0x4016) {
+            bool old_strobe = b->controller_strobe;
             bool new_strobe = (data & 0x01u) != 0;
             b->controller_strobe = new_strobe;
 
             if (new_strobe) {
                 // While high, latch continuously
                 latch_controllers(b);
-            } else {
-                // On transition to low, latch once (common behavior)
+            } else if (old_strobe && !new_strobe) {
+                // Latch once on high->low transition
                 latch_controllers(b);
             }
             return;
@@ -164,6 +175,5 @@ void Bus_CPUWrite(Bus* b, u16 addr, u8 data)
     // $4020-$FFFF: cartridge space (mapper)
     if (b->cart) {
         (void)Cart_CPUWrite(b->cart, addr, data);
-        return;
     }
 }

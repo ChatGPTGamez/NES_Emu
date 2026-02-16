@@ -1,6 +1,7 @@
 #pragma once
 #include "nes/common.h"
 #include "nes/input.h"
+#include "nes/ppu/ppu2c02.h"
 #include <stdbool.h>
 
 typedef struct Cart Cart;
@@ -11,8 +12,8 @@ typedef struct Bus {
     // 2KB internal RAM ($0000-$07FF), mirrored to $1FFF
     u8 ram[2048];
 
-    // PPU register stubs ($2000-$2007), mirrored to $3FFF
-    u8 ppu_regs[8];
+    // PPU core + register interface
+    PPU2C02 ppu;
 
     // Open bus behavior (very simplified for now)
     u8 open_bus;
