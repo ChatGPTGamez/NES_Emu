@@ -40,7 +40,14 @@ typedef struct PPU2C02 {
     u8 palette[32];
     u8 oam[256];
 
-    // Optional debug framebuffer placeholder
+    // Per-scanline sprite evaluation cache (up to 8 visible sprites)
+    u8 scanline_sprites[8];
+    u8 scanline_sprite_count;
+    bool scanline_has_sprite0;
+    bool scanline_overflow;
+    int sprite_eval_scanline;
+
+    // Framebuffer (ARGB8888)
     u32 fb[PPU_FB_W * PPU_FB_H];
 } PPU2C02;
 

@@ -181,20 +181,38 @@ static u8 bg_palette_index_at(PPU2C02* p, u16 v, u8 fine_x)
     return (u8)(((pal_hi << 2) | px) & 0x0Fu);
 }
 
+static void evaluate_scanline_sprites(PPU2C02* p, int y)
+{
+    p->scanline_sprite_count = 0;
+    p->scanline_has_sprite0 = false;
+    p->scanline_overflow = false;
+
+    for (int i = 0; i < 64; i++) {
+        int base = i * 4;
+        int sy = (int)p->oam[base] + 1;
+        if (y < sy || y >= sy + 8) continue;
+
+        if (p->scanline_sprite_count < 8) {
+            p->scanline_sprites[p->scanline_sprite_count++] = (u8)i;
+            if (i == 0) p->scanline_has_sprite0 = true;
+        } else {
+            p->scanline_overflow = true;
+            break;
+        }
+    }
+}
+
 static bool sprite_palette_index_at(PPU2C02* p, int x, int y,
                                     u8* out_pal_index, bool* out_behind_bg,
-                                    bool* out_sprite0, int* out_count)
+                                    bool* out_sprite0)
 {
-    int found = 0;
-    for (int i = 0; i < 64; i++) {
+    for (int si = 0; si < (int)p->scanline_sprite_count; si++) {
+        int i = (int)p->scanline_sprites[si];
         int base = i * 4;
         int sy = (int)p->oam[base] + 1;
         int tile_x = (int)p->oam[base + 3];
 
-        if (y < sy || y >= sy + 8) continue;
         if (x < tile_x || x >= tile_x + 8) continue;
-
-        found++;
 
         int row = y - sy;
         int col = x - tile_x;
@@ -216,15 +234,12 @@ static bool sprite_palette_index_at(PPU2C02* p, int x, int y,
 
         if (px == 0) continue;
 
-        u8 pal = (u8)(0x10u | ((attr & 0x03u) << 2) | px);
-        *out_pal_index = pal;
+        *out_pal_index = (u8)(0x10u | ((attr & 0x03u) << 2) | px);
         *out_behind_bg = (attr & 0x20u) != 0;
         *out_sprite0 = (i == 0);
-        if (out_count) *out_count = found;
         return true;
     }
 
-    if (out_count) *out_count = found;
     return false;
 }
 
@@ -248,19 +263,13 @@ static void render_visible_dot(PPU2C02* p)
     u8 spr_pal_index = 0u;
     bool spr_behind_bg = false;
     bool spr0 = false;
-    int sprite_count = 0;
-    bool spr_hit = false;
+    bool spr_opaque = false;
 
     if (show_spr && (show_left_spr || x >= 8)) {
-        spr_hit = sprite_palette_index_at(p, x, y, &spr_pal_index, &spr_behind_bg, &spr0, &sprite_count);
-    }
-
-    if (sprite_count > 8) {
-        p->status |= PPUSTATUS_SPROVERFLOW;
+        spr_opaque = sprite_palette_index_at(p, x, y, &spr_pal_index, &spr_behind_bg, &spr0);
     }
 
     bool bg_opaque = bg_pal_index != 0u;
-    bool spr_opaque = spr_hit;
 
     if (spr0 && bg_opaque && spr_opaque && x < 255) {
         p->status |= PPUSTATUS_SPR0HIT;
@@ -284,6 +293,7 @@ bool PPU2C02_Init(PPU2C02* p, Cart* cart)
     memset(p, 0, sizeof(*p));
     p->cart = cart;
     p->scanline = 0;
+    p->sprite_eval_scanline = -2;
     return true;
 }
 
@@ -306,6 +316,11 @@ void PPU2C02_Reset(PPU2C02* p)
     p->scanline = 0;
     p->frame_complete = false;
     p->nmi_pending = false;
+
+    p->scanline_sprite_count = 0;
+    p->scanline_has_sprite0 = false;
+    p->scanline_overflow = false;
+    p->sprite_eval_scanline = -2;
 
     memset(p->nametables, 0, sizeof(p->nametables));
     memset(p->palette, 0, sizeof(p->palette));
@@ -426,17 +441,23 @@ void PPU2C02_Clock(PPU2C02* p)
     bool visible_scanline = (p->scanline >= 0 && p->scanline < 240);
     bool prerender_scanline = (p->scanline == -1);
 
+    if (visible_scanline && p->sprite_eval_scanline != p->scanline) {
+        evaluate_scanline_sprites(p, p->scanline);
+        p->sprite_eval_scanline = p->scanline;
+        if (p->scanline_overflow) {
+            p->status |= PPUSTATUS_SPROVERFLOW;
+        }
+    }
+
     if (visible_scanline && p->cycle >= 1 && p->cycle <= 256) {
         render_visible_dot(p);
     }
 
-    // VBlank start at scanline 241, dot 1
     if (p->scanline == 241 && p->cycle == 1) {
         p->status = (u8)(p->status | PPUSTATUS_VBLANK);
         maybe_raise_nmi(p);
     }
 
-    // Pre-render line clears vblank and sprite flags at dot 1.
     if (prerender_scanline && p->cycle == 1) {
         p->status = (u8)(p->status & (u8)~(PPUSTATUS_VBLANK | PPUSTATUS_SPR0HIT | PPUSTATUS_SPROVERFLOW));
     }
@@ -464,6 +485,7 @@ void PPU2C02_Clock(PPU2C02* p)
     if (p->cycle > 340) {
         p->cycle = 0;
         p->scanline++;
+        p->sprite_eval_scanline = -2;
 
         if (p->scanline > 260) {
             p->scanline = -1;
