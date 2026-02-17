@@ -228,6 +228,8 @@ static u8 bg_palette_index_from_shifters(const PPU2C02* p)
 
 static void evaluate_scanline_sprites(PPU2C02* p, int y)
 {
+    int sprite_height = (p->ctrl & 0x20u) ? 16 : 8;
+
     p->scanline_sprite_count = 0;
     p->scanline_has_sprite0 = false;
     p->scanline_overflow = false;
@@ -235,7 +237,7 @@ static void evaluate_scanline_sprites(PPU2C02* p, int y)
     for (int i = 0; i < 64; i++) {
         int base = i * 4;
         int sy = (int)p->oam[base] + 1;
-        if (y < sy || y >= sy + 8) continue;
+        if (y < sy || y >= sy + sprite_height) continue;
 
         if (p->scanline_sprite_count < 8) {
             p->scanline_sprites[p->scanline_sprite_count++] = (u8)i;
@@ -251,24 +253,40 @@ static bool sprite_palette_index_at(PPU2C02* p, int x, int y,
                                     u8* out_pal_index, bool* out_behind_bg,
                                     bool* out_sprite0)
 {
+    bool sprite_8x16 = (p->ctrl & 0x20u) != 0;
+
     for (int si = 0; si < (int)p->scanline_sprite_count; si++) {
         int i = (int)p->scanline_sprites[si];
         int base = i * 4;
         int sy = (int)p->oam[base] + 1;
         int tile_x = (int)p->oam[base + 3];
+        int sprite_height = sprite_8x16 ? 16 : 8;
 
         if (x < tile_x || x >= tile_x + 8) continue;
+        if (y < sy || y >= sy + sprite_height) continue;
 
         int row = y - sy;
         int col = x - tile_x;
 
         u8 attr = p->oam[base + 2];
-        if (attr & 0x80u) row = 7 - row;
+        if (attr & 0x80u) row = (sprite_height - 1) - row;
         if (attr & 0x40u) col = 7 - col;
 
         u8 tile = p->oam[base + 1];
-        u16 patt_addr = (u16)(((p->ctrl & PPUCTRL_SPR_TABLE) ? 0x1000u : 0x0000u)
+        u16 patt_addr;
+        if (sprite_8x16) {
+            u16 table_base = (tile & 0x01u) ? 0x1000u : 0x0000u;
+            u8 tile_index = (u8)(tile & 0xFEu);
+            if (row >= 8) {
+                tile_index = (u8)(tile_index + 1u);
+                row -= 8;
+            }
+            patt_addr = (u16)(table_base + (u16)tile_index * 16u + (u16)row);
+        } else {
+            patt_addr = (u16)(((p->ctrl & PPUCTRL_SPR_TABLE) ? 0x1000u : 0x0000u)
                               + (u16)tile * 16u + (u16)row);
+        }
+
         u8 plane0 = ppu_mem_read(p, patt_addr);
         u8 plane1 = ppu_mem_read(p, (u16)(patt_addr + 8u));
 
@@ -299,8 +317,11 @@ static void render_visible_dot(PPU2C02* p)
     bool show_left_bg = (p->mask & PPUMASK_BG_LEFT) != 0;
     bool show_left_spr = (p->mask & PPUMASK_SPR_LEFT) != 0;
 
+    bool bg_pixel_enabled = show_bg && (show_left_bg || x >= 8);
+    bool spr_pixel_enabled = show_spr && (show_left_spr || x >= 8);
+
     u8 bg_pal_index = 0u;
-    if (show_bg && (show_left_bg || x >= 8)) {
+    if (bg_pixel_enabled) {
         bg_pal_index = bg_palette_index_from_shifters(p);
     }
 
@@ -309,13 +330,13 @@ static void render_visible_dot(PPU2C02* p)
     bool spr0 = false;
     bool spr_opaque = false;
 
-    if (show_spr && (show_left_spr || x >= 8)) {
+    if (spr_pixel_enabled) {
         spr_opaque = sprite_palette_index_at(p, x, y, &spr_pal_index, &spr_behind_bg, &spr0);
     }
 
     bool bg_opaque = bg_pal_index != 0u;
 
-    if (spr0 && bg_opaque && spr_opaque && x < 255) {
+    if (spr0 && bg_opaque && spr_opaque && x < 255 && bg_pixel_enabled && spr_pixel_enabled) {
         p->status |= PPUSTATUS_SPR0HIT;
     }
 
