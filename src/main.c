@@ -5,7 +5,9 @@
 static void usage(const char* exe)
 {
     NES_LOGI("Usage: %s path/to/rom.nes", exe);
-    NES_LOGI("Controls: Arrows=Dpad, Z=B, X=A, RShift=Select, Enter=Start, Esc=Quit");
+    NES_LOGI("P1: Arrows=Dpad, Z=B, X=A, RShift=Select, Enter=Start");
+    NES_LOGI("P2: WASD=Dpad, G=B, H=A, R=Select, T=Start");
+    NES_LOGI("Esc=Quit");
 }
 
 int main(int argc, char** argv)
