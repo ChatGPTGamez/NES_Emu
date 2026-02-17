@@ -202,6 +202,7 @@ int main(int argc, char** argv)
         "src/nes/ines.c",
         "src/nes/util/file.c",
         "src/nes/ppu/ppu2c02.c",
+        "src/nes/apu/apu2a03.c",
         "src/nes/cpu/cpu6502.c",
         "src/nes/cpu/cpu_tables.c",
         "-o",

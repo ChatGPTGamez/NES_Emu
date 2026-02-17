@@ -2,6 +2,7 @@
 #include "nes/common.h"
 #include "nes/input.h"
 #include "nes/ppu/ppu2c02.h"
+#include "nes/apu/apu2a03.h"
 #include <stdbool.h>
 
 typedef struct Cart Cart;
@@ -14,6 +15,9 @@ typedef struct Bus {
 
     // PPU core + register interface
     PPU2C02 ppu;
+
+    // APU core
+    APU2A03 apu;
 
     // Open bus behavior (very simplified for now)
     u8 open_bus;
@@ -32,16 +36,6 @@ typedef struct Bus {
 
     // CPU-cycle parity tracker (0 = even, 1 = odd)
     u8 cpu_cycle_parity;
-
-    // Minimal APU state
-    u8 apu_regs[0x14];           // $4000-$4013
-    u8 apu_status;               // $4015 channel enable bits
-    u8 apu_frame_counter;        // $4017 last written value
-    bool apu_frame_irq_pending;  // frame IRQ flag (visible in $4015 bit 6)
-    bool apu_frame_irq_inhibit;  // $4017 bit 6
-    bool apu_five_step_mode;     // $4017 bit 7
-    u32 apu_frame_cycle;         // frame sequencer cycle position
-    u8 apu_length_ctr[4];        // pulse1, pulse2, triangle, noise
 
     // Snapshot of current input (set each frame)
     NesInput input;
