@@ -312,6 +312,13 @@ static void render_visible_dot(PPU2C02* p)
     int y = p->scanline;
     if (x < 0 || x >= PPU_FB_W || y < 0 || y >= PPU_FB_H) return;
 
+    // Timing path prepares sprite cache at cycle 257 for the next scanline.
+    // Keep this fallback so direct state manipulation in tests/tools remains deterministic.
+    if (p->sprite_eval_scanline != y) {
+        evaluate_scanline_sprites(p, y);
+        p->sprite_eval_scanline = y;
+    }
+
     bool show_bg = (p->mask & PPUMASK_BG_SHOW) != 0;
     bool show_spr = (p->mask & PPUMASK_SPR_SHOW) != 0;
     bool show_left_bg = (p->mask & PPUMASK_BG_LEFT) != 0;
@@ -515,14 +522,6 @@ void PPU2C02_Clock(PPU2C02* p)
     bool visible_scanline = (p->scanline >= 0 && p->scanline < 240);
     bool prerender_scanline = (p->scanline == -1);
 
-    if (visible_scanline && p->sprite_eval_scanline != p->scanline) {
-        evaluate_scanline_sprites(p, p->scanline);
-        p->sprite_eval_scanline = p->scanline;
-        if (p->scanline_overflow) {
-            p->status |= PPUSTATUS_SPROVERFLOW;
-        }
-    }
-
     if (visible_scanline && p->cycle >= 1 && p->cycle <= 256) {
         render_visible_dot(p);
     }
@@ -552,6 +551,25 @@ void PPU2C02_Clock(PPU2C02* p)
         if (p->cycle == 257) {
             copy_x(p);
             bg_load_shifters(p);
+
+            // Prepare next scanline's sprite cache in the hardware timing window.
+            int next_scanline = p->scanline + 1;
+            if (prerender_scanline) {
+                next_scanline = 0;
+            }
+
+            if (next_scanline >= 0 && next_scanline < 240) {
+                evaluate_scanline_sprites(p, next_scanline);
+                p->sprite_eval_scanline = next_scanline;
+                if (p->scanline_overflow) {
+                    p->status |= PPUSTATUS_SPROVERFLOW;
+                }
+            } else {
+                p->scanline_sprite_count = 0;
+                p->scanline_has_sprite0 = false;
+                p->scanline_overflow = false;
+                p->sprite_eval_scanline = -2;
+            }
         }
 
         if (prerender_scanline && p->cycle >= 280 && p->cycle <= 304) {
