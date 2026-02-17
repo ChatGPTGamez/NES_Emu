@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<CodeBlocks_layout_file>
+	<FileVersion major="1" minor="0" />
+	<ActiveTarget name="Debug" />
+	<File name="src\main.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="1198" topLine="7" />
+		</Cursor>
+	</File>
+	<File name="src\nes\nes.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="2534" topLine="51" />
+		</Cursor>
+	</File>
+	<File name="include\nes\frontend\sdl_video.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="416" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="include\nes\ppu\ppu2c02.h" open="1" top="0" tabpos="2" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="0" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="include\nes\common.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="353" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="tests\cpu\test_cpu_smoke.c" open="1" top="0" tabpos="6" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="3317" topLine="96" />
+		</Cursor>
+	</File>
+	<File name="include\nes\mapper.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="513" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="include\nes\ines.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="1060" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="include\nes\cpu\cpu6502.h" open="1" top="1" tabpos="5" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="3106" topLine="54" />
+		</Cursor>
+	</File>
+	<File name="src\nes\input.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="108" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="src\nes\ines.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="3990" topLine="52" />
+		</Cursor>
+	</File>
+	<File name="include\nes\util\file.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="172" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="src\nes\mapper_nrom.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="2965" topLine="72" />
+		</Cursor>
+	</File>
+	<File name="src\nes\cpu\cpu6502.c" open="1" top="0" tabpos="4" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="17149" topLine="536" />
+		</Cursor>
+	</File>
+	<File name="include\nes\bus.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="877" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="src\nes\frontend\sdl_app.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="1961" topLine="21" />
+		</Cursor>
+	</File>
+	<File name="src\nes\cart.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="3694" topLine="86" />
+		</Cursor>
+	</File>
+	<File name="src\nes\frontend\sdl_video.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="2371" topLine="40" />
+		</Cursor>
+	</File>
+	<File name="include\nes\frontend\sdl_app.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="429" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="src\nes\util\file.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="899" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="include\nes\nes.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="628" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="src\nes\mapper.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="565" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="include\nes\input.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="622" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="include\nes\cart.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="763" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="include\nes\cpu\cpu_tables.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="788" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="src\nes\ppu\ppu2c02.c" open="1" top="0" tabpos="1" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="0" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="src\nes\bus.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="4423" topLine="121" />
+		</Cursor>
+	</File>
+	<File name="src\nes\cpu\cpu_tables.c" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="4680" topLine="52" />
+		</Cursor>
+	</File>
+	<File name="include\nes\ppu\ppu_regs.h" open="1" top="0" tabpos="3" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="0" topLine="0" />
+		</Cursor>
+	</File>
+	<File name="include\nes\log.h" open="0" top="0" tabpos="0" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="593" topLine="0" />
+		</Cursor>
+	</File>
+</CodeBlocks_layout_file>
