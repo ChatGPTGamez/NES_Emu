@@ -2,8 +2,11 @@
 #include "nes/cart.h"
 #include <string.h>
 
-enum {
-    APU_FRAME_IRQ_PERIOD_CPU = 29830
+static const u8 k_apu_len_table[32] = {
+    10, 254, 20, 2, 40, 4, 80, 6,
+    160, 8, 60, 10, 14, 12, 26, 14,
+    12, 16, 24, 18, 48, 20, 96, 22,
+    192, 24, 72, 26, 16, 28, 32, 30
 };
 
 static void latch_controllers(Bus* b)
@@ -57,10 +60,38 @@ static void begin_oam_dma(Bus* b, u8 page)
     perform_oam_dma_copy(b, page);
 
     // CPU is stalled for 513 or 514 cycles, depending on current parity.
-    // This is instruction-granularity timing (not per-microcycle exact), but
-    // preserves the key side effect that DMA steals CPU time.
     b->dma_stall_cycles = (u16)(513u + (b->cpu_cycle_parity ? 1u : 0u));
     b->dma_active = true;
+}
+
+static void apu_clock_half_frame(Bus* b)
+{
+    for (u8 ch = 0; ch < 4u; ch++) {
+        if ((b->apu_status & (u8)(1u << ch)) && b->apu_length_ctr[ch] > 0u) {
+            b->apu_length_ctr[ch]--;
+        }
+    }
+}
+
+static void apu_write_channel_len_reload(Bus* b, u16 addr, u8 data)
+{
+    // Writes to $4003/$4007/$400B/$400F load length counters from bits 7..3.
+    if (addr == 0x4003u) {
+        if (b->apu_status & 0x01u) b->apu_length_ctr[0] = k_apu_len_table[(data >> 3) & 0x1Fu];
+        return;
+    }
+    if (addr == 0x4007u) {
+        if (b->apu_status & 0x02u) b->apu_length_ctr[1] = k_apu_len_table[(data >> 3) & 0x1Fu];
+        return;
+    }
+    if (addr == 0x400Bu) {
+        if (b->apu_status & 0x04u) b->apu_length_ctr[2] = k_apu_len_table[(data >> 3) & 0x1Fu];
+        return;
+    }
+    if (addr == 0x400Fu) {
+        if (b->apu_status & 0x08u) b->apu_length_ctr[3] = k_apu_len_table[(data >> 3) & 0x1Fu];
+        return;
+    }
 }
 
 bool Bus_Init(Bus* b, Cart* cart)
@@ -93,11 +124,14 @@ void Bus_Reset(Bus* b)
     b->dma_page = 0;
     b->cpu_cycle_parity = 0;
 
+    memset(b->apu_regs, 0, sizeof(b->apu_regs));
     b->apu_status = 0;
     b->apu_frame_counter = 0;
     b->apu_frame_irq_pending = false;
     b->apu_frame_irq_inhibit = false;
-    b->apu_frame_divider = 0;
+    b->apu_five_step_mode = false;
+    b->apu_frame_cycle = 0;
+    memset(b->apu_length_ctr, 0, sizeof(b->apu_length_ctr));
 
     b->input.p1 = 0;
     b->input.p2 = 0;
@@ -142,25 +176,31 @@ bool Bus_APUTick(Bus* b)
 {
     if (!b) return false;
 
-    // Minimal frame-counter IRQ model:
-    // - only active in 4-step mode (bit 7 = 0)
-    // - inhibited by bit 6 of $4017
-    // - roughly one IRQ pulse per frame-counter sequence
-    b->apu_frame_divider++;
-    if (b->apu_frame_divider >= (u32)APU_FRAME_IRQ_PERIOD_CPU) {
-        b->apu_frame_divider = 0;
+    // Minimal-but-structured frame sequencer timing.
+    b->apu_frame_cycle++;
 
-        bool five_step_mode = (b->apu_frame_counter & 0x80u) != 0;
-        if (!five_step_mode && !b->apu_frame_irq_inhibit) {
-            b->apu_frame_irq_pending = true;
+    if (!b->apu_five_step_mode) {
+        if (b->apu_frame_cycle == 7457u || b->apu_frame_cycle == 14915u) {
+            apu_clock_half_frame(b);
+        }
+
+        if (b->apu_frame_cycle >= 14915u) {
+            if (!b->apu_frame_irq_inhibit) {
+                b->apu_frame_irq_pending = true;
+            }
+            b->apu_frame_cycle = 0;
+        }
+    } else {
+        if (b->apu_frame_cycle == 7457u || b->apu_frame_cycle == 14915u) {
+            apu_clock_half_frame(b);
+        }
+
+        if (b->apu_frame_cycle >= 18641u) {
+            b->apu_frame_cycle = 0;
         }
     }
 
-    if (b->apu_frame_irq_pending && !b->apu_frame_irq_inhibit) {
-        return true;
-    }
-
-    return false;
+    return b->apu_frame_irq_pending && !b->apu_frame_irq_inhibit;
 }
 
 u8 Bus_CPURead(Bus* b, u16 addr)
@@ -185,8 +225,15 @@ u8 Bus_CPURead(Bus* b, u16 addr)
     if (addr >= 0x4000 && addr <= 0x4017) {
         // $4015: APU status
         if (addr == 0x4015) {
+            u8 status = 0;
+            if (b->apu_length_ctr[0] > 0u) status |= 0x01u;
+            if (b->apu_length_ctr[1] > 0u) status |= 0x02u;
+            if (b->apu_length_ctr[2] > 0u) status |= 0x04u;
+            if (b->apu_length_ctr[3] > 0u) status |= 0x08u;
+            if (b->apu_status & 0x10u) status |= 0x10u; // DMC active approximated by enable
+
             u8 irq_bit = b->apu_frame_irq_pending ? 0x40u : 0x00u;
-            u8 v = (u8)((b->open_bus & 0x20u) | irq_bit | (b->apu_status & 0x1Fu));
+            u8 v = (u8)((b->open_bus & 0x20u) | irq_bit | status);
             b->apu_frame_irq_pending = false;
             b->open_bus = v;
             return v;
@@ -200,6 +247,13 @@ u8 Bus_CPURead(Bus* b, u16 addr)
         // $4017: controller port 2
         if (addr == 0x4017) {
             return read_controller_port(b, true);
+        }
+
+        // $4000-$4013: basic APU reg readback placeholder from local state
+        if (addr <= 0x4013u) {
+            u8 v = b->apu_regs[(u8)(addr - 0x4000u)];
+            b->open_bus = v;
+            return v;
         }
 
         // Other APU/IO regs: return open bus for now
@@ -238,6 +292,13 @@ void Bus_CPUWrite(Bus* b, u16 addr, u8 data)
 
     // $4000-$4017: APU/IO
     if (addr >= 0x4000 && addr <= 0x4017) {
+        // $4000-$4013: APU channel regs
+        if (addr <= 0x4013u) {
+            b->apu_regs[(u8)(addr - 0x4000u)] = data;
+            apu_write_channel_len_reload(b, addr, data);
+            return;
+        }
+
         // $4014: OAMDMA
         if (addr == 0x4014) {
             begin_oam_dma(b, data);
@@ -247,6 +308,11 @@ void Bus_CPUWrite(Bus* b, u16 addr, u8 data)
         // $4015: APU status/control
         if (addr == 0x4015) {
             b->apu_status = (u8)(data & 0x1Fu);
+
+            if ((b->apu_status & 0x01u) == 0u) b->apu_length_ctr[0] = 0;
+            if ((b->apu_status & 0x02u) == 0u) b->apu_length_ctr[1] = 0;
+            if ((b->apu_status & 0x04u) == 0u) b->apu_length_ctr[2] = 0;
+            if ((b->apu_status & 0x08u) == 0u) b->apu_length_ctr[3] = 0;
             return;
         }
 
@@ -269,15 +335,15 @@ void Bus_CPUWrite(Bus* b, u16 addr, u8 data)
         // $4017: APU frame counter
         if (addr == 0x4017) {
             b->apu_frame_counter = data;
+            b->apu_five_step_mode = (data & 0x80u) != 0;
             b->apu_frame_irq_inhibit = (data & 0x40u) != 0;
             if (b->apu_frame_irq_inhibit) {
                 b->apu_frame_irq_pending = false;
             }
-            b->apu_frame_divider = 0;
+            b->apu_frame_cycle = 0;
             return;
         }
 
-        // Other APU regs ignored for now
         return;
     }
 

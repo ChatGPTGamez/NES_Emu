@@ -33,12 +33,15 @@ typedef struct Bus {
     // CPU-cycle parity tracker (0 = even, 1 = odd)
     u8 cpu_cycle_parity;
 
-    // Minimal APU/frame-counter state
-    u8 apu_status;               // $4015 write-side channel enable bits
+    // Minimal APU state
+    u8 apu_regs[0x14];           // $4000-$4013
+    u8 apu_status;               // $4015 channel enable bits
     u8 apu_frame_counter;        // $4017 last written value
     bool apu_frame_irq_pending;  // frame IRQ flag (visible in $4015 bit 6)
     bool apu_frame_irq_inhibit;  // $4017 bit 6
-    u32 apu_frame_divider;       // CPU-cycle divider for frame IRQ cadence
+    bool apu_five_step_mode;     // $4017 bit 7
+    u32 apu_frame_cycle;         // frame sequencer cycle position
+    u8 apu_length_ctr[4];        // pulse1, pulse2, triangle, noise
 
     // Snapshot of current input (set each frame)
     NesInput input;
