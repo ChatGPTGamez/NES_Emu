@@ -47,6 +47,16 @@ typedef struct PPU2C02 {
     bool scanline_overflow;
     int sprite_eval_scanline;
 
+    // Background fetch/shifter pipeline
+    u8 bg_next_tile_id;
+    u8 bg_next_tile_attr;
+    u8 bg_next_tile_lsb;
+    u8 bg_next_tile_msb;
+    u16 bg_shifter_pat_lo;
+    u16 bg_shifter_pat_hi;
+    u16 bg_shifter_attr_lo;
+    u16 bg_shifter_attr_hi;
+
     // Framebuffer (ARGB8888)
     u32 fb[PPU_FB_W * PPU_FB_H];
 } PPU2C02;

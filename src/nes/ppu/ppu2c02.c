@@ -154,31 +154,76 @@ static void copy_y(PPU2C02* p)
     p->v = (u16)((p->v & (u16)~0x7BE0u) | (p->t & 0x7BE0u));
 }
 
-static u8 bg_palette_index_at(PPU2C02* p, u16 v, u8 fine_x)
+static void bg_shift(PPU2C02* p)
 {
-    u16 nt_addr = (u16)(0x2000u | (v & 0x0FFFu));
-    u8 tile_id = ppu_mem_read(p, nt_addr);
+    p->bg_shifter_pat_lo <<= 1;
+    p->bg_shifter_pat_hi <<= 1;
+    p->bg_shifter_attr_lo <<= 1;
+    p->bg_shifter_attr_hi <<= 1;
+}
 
-    u16 attr_addr = (u16)(0x23C0u | (v & 0x0C00u) | ((v >> 4) & 0x38u) | ((v >> 2) & 0x07u));
-    u8 attr = ppu_mem_read(p, attr_addr);
+static void bg_load_shifters(PPU2C02* p)
+{
+    p->bg_shifter_pat_lo = (u16)((p->bg_shifter_pat_lo & 0xFF00u) | p->bg_next_tile_lsb);
+    p->bg_shifter_pat_hi = (u16)((p->bg_shifter_pat_hi & 0xFF00u) | p->bg_next_tile_msb);
 
-    u8 quadrant_shift = (u8)(((v >> 4) & 4u) | (v & 2u));
-    u8 pal_hi = (u8)((attr >> quadrant_shift) & 0x03u);
+    u16 attr_lo = (p->bg_next_tile_attr & 0x01u) ? 0x00FFu : 0x0000u;
+    u16 attr_hi = (p->bg_next_tile_attr & 0x02u) ? 0x00FFu : 0x0000u;
+    p->bg_shifter_attr_lo = (u16)((p->bg_shifter_attr_lo & 0xFF00u) | attr_lo);
+    p->bg_shifter_attr_hi = (u16)((p->bg_shifter_attr_hi & 0xFF00u) | attr_hi);
+}
 
-    u8 fine_y = (u8)((v >> 12) & 0x07u);
-    u16 patt_addr = (u16)(((p->ctrl & PPUCTRL_BG_TABLE) ? 0x1000u : 0x0000u)
-                          + (u16)tile_id * 16u + fine_y);
+static void bg_fetch_step(PPU2C02* p)
+{
+    switch (p->cycle & 7) {
+        case 1:
+            bg_load_shifters(p);
+            p->bg_next_tile_id = ppu_mem_read(p, (u16)(0x2000u | (p->v & 0x0FFFu)));
+            break;
 
-    u8 plane0 = ppu_mem_read(p, patt_addr);
-    u8 plane1 = ppu_mem_read(p, (u16)(patt_addr + 8u));
+        case 3: {
+            u16 attr_addr = (u16)(0x23C0u | (p->v & 0x0C00u) | ((p->v >> 4) & 0x38u) | ((p->v >> 2) & 0x07u));
+            u8 attr = ppu_mem_read(p, attr_addr);
+            if (p->v & 0x40u) attr >>= 4;
+            if (p->v & 0x02u) attr >>= 2;
+            p->bg_next_tile_attr = (u8)(attr & 0x03u);
+        } break;
 
-    u8 bit = (u8)(7u - (fine_x & 7u));
-    u8 lo = (u8)((plane0 >> bit) & 1u);
-    u8 hi = (u8)((plane1 >> bit) & 1u);
-    u8 px = (u8)((hi << 1) | lo);
+        case 5: {
+            u8 fine_y = (u8)((p->v >> 12) & 0x07u);
+            u16 patt_addr = (u16)(((p->ctrl & PPUCTRL_BG_TABLE) ? 0x1000u : 0x0000u)
+                                  + (u16)p->bg_next_tile_id * 16u + fine_y);
+            p->bg_next_tile_lsb = ppu_mem_read(p, patt_addr);
+        } break;
 
-    if (px == 0) return 0u;
-    return (u8)(((pal_hi << 2) | px) & 0x0Fu);
+        case 7: {
+            u8 fine_y = (u8)((p->v >> 12) & 0x07u);
+            u16 patt_addr = (u16)(((p->ctrl & PPUCTRL_BG_TABLE) ? 0x1000u : 0x0000u)
+                                  + (u16)p->bg_next_tile_id * 16u + fine_y + 8u);
+            p->bg_next_tile_msb = ppu_mem_read(p, patt_addr);
+        } break;
+
+        case 0:
+            inc_coarse_x(p);
+            break;
+
+        default:
+            break;
+    }
+}
+
+static u8 bg_palette_index_from_shifters(const PPU2C02* p)
+{
+    u16 bit_mux = (u16)(0x8000u >> p->x);
+
+    u8 p0 = (p->bg_shifter_pat_lo & bit_mux) ? 1u : 0u;
+    u8 p1 = (p->bg_shifter_pat_hi & bit_mux) ? 1u : 0u;
+    u8 px = (u8)((p1 << 1) | p0);
+    if (px == 0u) return 0u;
+
+    u8 a0 = (p->bg_shifter_attr_lo & bit_mux) ? 1u : 0u;
+    u8 a1 = (p->bg_shifter_attr_hi & bit_mux) ? 1u : 0u;
+    return (u8)(((a1 << 1) | a0) << 2 | px);
 }
 
 static void evaluate_scanline_sprites(PPU2C02* p, int y)
@@ -256,8 +301,7 @@ static void render_visible_dot(PPU2C02* p)
 
     u8 bg_pal_index = 0u;
     if (show_bg && (show_left_bg || x >= 8)) {
-        u8 fine_x = (u8)(((u8)x + p->x) & 7u);
-        bg_pal_index = bg_palette_index_at(p, p->v, fine_x);
+        bg_pal_index = bg_palette_index_from_shifters(p);
     }
 
     u8 spr_pal_index = 0u;
@@ -316,6 +360,15 @@ void PPU2C02_Reset(PPU2C02* p)
     p->scanline = 0;
     p->frame_complete = false;
     p->nmi_pending = false;
+
+    p->bg_next_tile_id = 0;
+    p->bg_next_tile_attr = 0;
+    p->bg_next_tile_lsb = 0;
+    p->bg_next_tile_msb = 0;
+    p->bg_shifter_pat_lo = 0;
+    p->bg_shifter_pat_hi = 0;
+    p->bg_shifter_attr_lo = 0;
+    p->bg_shifter_attr_hi = 0;
 
     p->scanline_sprite_count = 0;
     p->scanline_has_sprite0 = false;
@@ -463,17 +516,21 @@ void PPU2C02_Clock(PPU2C02* p)
     }
 
     if (rendering && (visible_scanline || prerender_scanline)) {
-        if (p->cycle >= 1 && p->cycle <= 256) {
-            if ((p->cycle & 7) == 0) {
-                inc_coarse_x(p);
-            }
-            if (p->cycle == 256) {
-                inc_y(p);
-            }
+        if ((p->cycle >= 2 && p->cycle <= 257) || (p->cycle >= 322 && p->cycle <= 337)) {
+            bg_shift(p);
+        }
+
+        if ((p->cycle >= 1 && p->cycle <= 256) || (p->cycle >= 321 && p->cycle <= 336)) {
+            bg_fetch_step(p);
+        }
+
+        if (p->cycle == 256) {
+            inc_y(p);
         }
 
         if (p->cycle == 257) {
             copy_x(p);
+            bg_load_shifters(p);
         }
 
         if (prerender_scanline && p->cycle >= 280 && p->cycle <= 304) {
