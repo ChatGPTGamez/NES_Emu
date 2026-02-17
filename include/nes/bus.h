@@ -21,6 +21,8 @@ typedef struct Bus {
     // Controller I/O ($4016/$4017)
     u8 controller_latch_p1;
     u8 controller_shift_p1;
+    u8 controller_latch_p2;
+    u8 controller_shift_p2;
     bool controller_strobe;
 
     // OAM DMA timing/model state

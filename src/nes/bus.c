@@ -11,6 +11,31 @@ static void latch_controllers(Bus* b)
     // NES controller latch: bit0=A ... bit7=Right (matches our NesInput mapping)
     b->controller_latch_p1 = b->input.p1;
     b->controller_shift_p1 = b->controller_latch_p1;
+
+    b->controller_latch_p2 = b->input.p2;
+    b->controller_shift_p2 = b->controller_latch_p2;
+}
+
+static u8 read_controller_port(Bus* b, bool port2)
+{
+    u8 bit;
+    if (b->controller_strobe) {
+        u8 src = port2 ? b->input.p2 : b->input.p1;
+        bit = (src & 0x01u) ? 1u : 0u;
+    } else {
+        if (port2) {
+            bit = (b->controller_shift_p2 & 0x01u) ? 1u : 0u;
+            b->controller_shift_p2 = (u8)((b->controller_shift_p2 >> 1) | 0x80u);
+        } else {
+            bit = (b->controller_shift_p1 & 0x01u) ? 1u : 0u;
+            b->controller_shift_p1 = (u8)((b->controller_shift_p1 >> 1) | 0x80u);
+        }
+    }
+
+    // Many games expect upper bits to be open bus-ish; keep previous upper bits.
+    u8 v = (u8)((b->open_bus & 0xFEu) | bit);
+    b->open_bus = v;
+    return v;
 }
 
 static void perform_oam_dma_copy(Bus* b, u8 page)
@@ -59,6 +84,8 @@ void Bus_Reset(Bus* b)
 
     b->controller_latch_p1 = 0;
     b->controller_shift_p1 = 0;
+    b->controller_latch_p2 = 0;
+    b->controller_shift_p2 = 0;
     b->controller_strobe = false;
 
     b->dma_active = false;
@@ -73,6 +100,7 @@ void Bus_Reset(Bus* b)
     b->apu_frame_divider = 0;
 
     b->input.p1 = 0;
+    b->input.p2 = 0;
 
     PPU2C02_Reset(&b->ppu);
 }
@@ -166,25 +194,12 @@ u8 Bus_CPURead(Bus* b, u16 addr)
 
         // $4016: controller port 1
         if (addr == 0x4016) {
-            // If strobe high, always return current A button in bit0
-            u8 bit;
-            if (b->controller_strobe) {
-                bit = (b->input.p1 & 0x01u) ? 1u : 0u;
-            } else {
-                bit = (b->controller_shift_p1 & 0x01u) ? 1u : 0u;
-                // Shift right; after 8 reads hardware returns 1s typically.
-                b->controller_shift_p1 = (u8)((b->controller_shift_p1 >> 1) | 0x80u);
-            }
-
-            // Many games expect upper bits to be open bus-ish; we keep it simple.
-            u8 v = (u8)((b->open_bus & 0xFEu) | bit);
-            b->open_bus = v;
-            return v;
+            return read_controller_port(b, false);
         }
 
-        // $4017: controller port 2 (not implemented -> open bus)
+        // $4017: controller port 2
         if (addr == 0x4017) {
-            return b->open_bus;
+            return read_controller_port(b, true);
         }
 
         // Other APU/IO regs: return open bus for now
