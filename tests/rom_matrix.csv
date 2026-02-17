@@ -1,4 +1,5 @@
 rom,mapper,supported_now,prg_banks_16k,chr_banks_8k,mirroring,boot,title_stable,input_ok,notes
+Attack of the Killer Tomatoes (USA).nes,1,yes,8,16,horizontal,,,,
 Back to the Future (USA).nes,3,no,2,4,horizontal,,,,
 Battletoads (USA).nes,7,no,16,0,horizontal,,,,
 Bomberman (USA).nes,0,yes,1,1,vertical,,,,
@@ -13,5 +14,6 @@ Metroid (USA).nes,1,yes,8,0,horizontal,,,,
 Ms. Pac-Man (USA) (Namco).nes,0,yes,2,1,vertical,,,,
 Rampage (USA).nes,4,no,8,8,horizontal,,,,
 Splatterhouse - Wanpaku Graffiti (Japan).nes,210,no,8,16,vertical,,,,
+Zombie Nation (USA).nes,4,no,8,16,horizontal,,,,
 bbbb.nes,4,no,8,16,horizontal,,,,
 smb.nes,0,yes,2,1,vertical,,,,

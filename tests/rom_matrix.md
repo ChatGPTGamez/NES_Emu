@@ -1,8 +1,8 @@
 # ROM Regression Matrix Summary
 
-- Total ROMs scanned: **16**
-- Supported mappers (0/1/2): **9**
-- Unsupported mapper ROMs: **7**
+- Total ROMs scanned: **18**
+- Supported mappers (0/1/2): **10**
+- Unsupported mapper ROMs: **8**
 
 ## Unsupported Mapper ROMs
 
@@ -14,4 +14,5 @@
 | `Little Samson (USA).nes` | 4 |
 | `Rampage (USA).nes` | 4 |
 | `Splatterhouse - Wanpaku Graffiti (Japan).nes` | 210 |
+| `Zombie Nation (USA).nes` | 4 |
 | `bbbb.nes` | 4 |
